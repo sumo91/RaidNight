@@ -24,7 +24,11 @@ export type GuildCommand =
   /** 安排小队练级(进驻已解锁地图;未解锁/未知名图由门面忽略) */
   | { readonly type: 'assignLevelingMap'; readonly squadId: number; readonly mapId: string }
   /** 停止小队练级(回城休整,疲劳自然恢复) */
-  | { readonly type: 'stopLeveling'; readonly squadId: number };
+  | { readonly type: 'stopLeveling'; readonly squadId: number }
+  /** 安排小队下本(进驻已解锁 5 人本;未解锁/未满职能由门面忽略) */
+  | { readonly type: 'assignDungeon'; readonly squadId: number; readonly dungeonId: string }
+  /** 停止小队下本(回城休整,疲劳自然恢复) */
+  | { readonly type: 'stopDungeon'; readonly squadId: number };
 
 /** 公会名长度上限(规则只存在于 sim,UI 不做校验)。 */
 export const GUILD_NAME_MAX_LENGTH = 24;

@@ -1,4 +1,5 @@
 import { GUILD_NAME_MAX_LENGTH } from './commands';
+import type { EncounterBand } from './encounter';
 import { generateFoundingRoster } from './member-gen';
 import { generateApplicantPool } from './recruit';
 import { RECRUIT } from '../content/recruit';
@@ -63,16 +64,51 @@ export interface Squad {
   readonly activity?: SquadActivity;
 }
 
-/** 小队活动:练级(进驻地图);后续工单(5 人本等)在此扩展类型。 */
+/** 小队活动:练级(进驻地图)/ 下本(进驻 5 人本);后续工单(团本等)在此扩展类型。 */
 export type SquadActivity =
   /** 练级:进驻某张练级地图,自动层逐日结算 */
-  | { readonly type: 'leveling'; readonly mapId: string };
+  | { readonly type: 'leveling'; readonly mapId: string }
+  /** 下本:进驻某座 5 人本,自动层逐日按 runsPerRun 结算(规则见 sim/dungeon.ts) */
+  | { readonly type: 'dungeon'; readonly dungeonId: string };
 
 /** 单件装备:部位 + 品质 + 装等(物品表见后续装备工单)。 */
 export interface GearItem {
   readonly slot: GearSlot;
   readonly quality: Quality;
   readonly itemLevel: number;
+}
+
+/** 一件掉落的去向:自动择优穿戴的结果(equipped = false 表示无人可提升,已分解)。 */
+export interface DropOutcome {
+  readonly slot: GearSlot;
+  readonly quality: Quality;
+  readonly itemLevel: number;
+  /** 是否被穿上(择优:全队该部位提升最大者) */
+  readonly equipped: boolean;
+  /** 换装团员名(equipped 时必有) */
+  readonly assignedTo?: string;
+  /** 该部位装等提升值(equipped 时必为正) */
+  readonly upgradeDelta?: number;
+}
+
+/** 一次下本的结果卡数据(结构化快照;过程要点同时以「下本」事件进短日志)。 */
+export interface DungeonRunReport {
+  readonly dungeonId: string;
+  readonly dungeonName: string;
+  readonly squadId: number;
+  /** 第几小队(1 起,按编成顺序) */
+  readonly squadOrdinal: number;
+  readonly atGameMinutes: number;
+  readonly success: boolean;
+  /** 结算三要素快照:战力 / 难度目标 / 成功概率 / 三段式区间 */
+  readonly power: number;
+  readonly target: number;
+  readonly successChance: number;
+  readonly band: EncounterBand;
+  /** 参战名单快照(结算时刻的名字/职能/装等) */
+  readonly members: readonly { readonly name: string; readonly role: string; readonly itemLevel: number }[];
+  /** 本次掉落与去向(失败为空数组) */
+  readonly drops: readonly DropOutcome[];
 }
 
 /** 出勤画像:风格 id(content/attendance)+ 基础出勤率(0-100)。 */
@@ -117,6 +153,8 @@ export interface GameState {
   readonly applicants: readonly Applicant[];
   /** 下一个申请编号 */
   readonly nextApplicationId: number;
+  /** 最近一次下本的结果卡数据(结构化;历史过程见事件日志的「下本」条目) */
+  readonly lastDungeonRun?: DungeonRunReport;
   /** 下一个事件序号 */
   readonly nextEventSeq: number;
 }
@@ -147,6 +185,7 @@ export function createInitialState(seed: number, guildName?: string): GameState 
     nextSquadId: 1,
     applicants: pool.applicants,
     nextApplicationId: pool.nextApplicationId,
+    lastDungeonRun: undefined,
     nextEventSeq: 1,
   };
 }

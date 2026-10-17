@@ -9,9 +9,10 @@ import { GAME_MINUTES_PER_DAY, GAME_MINUTES_PER_WEEK } from '../sim/clock';
 import type { SimInput } from '../sim/facade';
 import type { SimEvent } from '../sim/events';
 import { squadCompositions, teamCheck, unassignedMembers } from '../sim/comp';
+import { dungeonStatuses, squadDungeon, squadDungeonReadiness } from '../sim/dungeon';
 import { levelingMapStatuses, squadLevelingMap, xpToNextLevel } from '../sim/leveling';
 import { averageItemLevel, guildAverageLevel } from '../sim/roster';
-import type { GameState, Member } from '../sim/state';
+import type { DungeonRunReport, GameState, Member } from '../sim/state';
 import { formatGameClock, formatGameStamp } from './format';
 
 /**
@@ -95,6 +96,12 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
         </div>
       </section>
       <section class="pane" data-pane="schedule" hidden>
+        <div class="report-panel" data-ref="dungeon-report-wrap" hidden>
+          <div class="pool-head">
+            <h2 class="section-title">最近下本</h2>
+          </div>
+          <div class="dungeon-report" data-ref="dungeon-report"></div>
+        </div>
         <div class="leveling-head">
           <h2 class="section-title">练级安排</h2>
           <span class="leveling-avg" data-ref="leveling-avg"></span>
@@ -105,6 +112,15 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
           <h2 class="section-title">小队分配</h2>
         </div>
         <ul class="assign-list" data-ref="assign-list"></ul>
+        <div class="leveling-head dungeon-head">
+          <h2 class="section-title">5 人本</h2>
+        </div>
+        <p class="leveling-note">派满职能小队(5 人 + 至少 1 坦 1 奶)进驻;成败由装等、职能与光环共同决定,胜利掉落装备并自动择优穿戴。</p>
+        <ul class="map-list dungeon-list" data-ref="dungeon-list"></ul>
+        <div class="pool-head assign-head">
+          <h2 class="section-title">下本分配</h2>
+        </div>
+        <ul class="assign-list dungeon-assign-list" data-ref="dungeon-assign-list"></ul>
       </section>
       <section class="pane" data-pane="world" hidden>
         <p class="empty-hint">「世界」页签在后续工单开放。</p>
@@ -149,6 +165,10 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
   const levelingAvgEl = requireElement<HTMLSpanElement>(root, 'leveling-avg');
   const mapListEl = requireElement<HTMLUListElement>(root, 'map-list');
   const assignListEl = requireElement<HTMLUListElement>(root, 'assign-list');
+  const dungeonReportWrapEl = requireElement<HTMLDivElement>(root, 'dungeon-report-wrap');
+  const dungeonReportEl = requireElement<HTMLDivElement>(root, 'dungeon-report');
+  const dungeonListEl = requireElement<HTMLUListElement>(root, 'dungeon-list');
+  const dungeonAssignListEl = requireElement<HTMLUListElement>(root, 'dungeon-assign-list');
 
   // 页签切换:纯展示行为(哪个 pane 可见),不是业务规则
   let activeTab: TabId = 'roster';
@@ -288,6 +308,34 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
       }
       options.dispatch({
         command: { type: 'assignLevelingMap', squadId, mapId: select.value },
+        deltaGameMinutes: 0,
+      });
+    }
+  });
+
+  // 下本分配操作:只是把「进驻/停止下本」转交给门面裁决
+  // (解锁与满职能校验一律在 sim;此处不禁用、不做规则判断)
+  dungeonAssignListEl.addEventListener('click', (event) => {
+    const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-action]');
+    if (button === null || button.disabled) {
+      return;
+    }
+    const row = button.closest<HTMLElement>('[data-squad-id]');
+    if (row === null) {
+      return;
+    }
+    const squadId = Number(row.dataset.squadId);
+    if (button.dataset.action === 'stop-dungeon') {
+      options.dispatch({ command: { type: 'stopDungeon', squadId }, deltaGameMinutes: 0 });
+      return;
+    }
+    if (button.dataset.action === 'assign-dungeon') {
+      const select = row.querySelector<HTMLSelectElement>('select');
+      if (select === null || select.value === '') {
+        return;
+      }
+      options.dispatch({
+        command: { type: 'assignDungeon', squadId, dungeonId: select.value },
         deltaGameMinutes: 0,
       });
     }
@@ -500,13 +548,22 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
     }
     card.append(head);
 
-    // 练级活动行:当前进驻的地图(或休整);数值只读自内容表,安排在「日程」页
+    // 活动行:当前进驻的地图/副本(或休整);数值只读自内容表,安排在「日程」页
     const activeMap = squadLevelingMap(composition.squad);
-    const activity = el('div', `squad-activity${activeMap ? ' squad-activity-on' : ''}`);
+    const activeDungeon = squadDungeon(composition.squad);
+    const activity = el(
+      'div',
+      `squad-activity${activeMap || activeDungeon ? ' squad-activity-on' : ''}`,
+    );
     if (activeMap !== undefined) {
       activity.append(el('span', 'squad-activity-text', `练级中:${activeMap.name}(${activeMap.tier}区)`));
       activity.append(
         el('span', 'squad-activity-sub', `经验 ${activeMap.xpPerDay}/日 · 疲劳 +${activeMap.fatiguePerDay}/日 · 阵亡率 ${Math.round(activeMap.deathChancePerDay * 100)}%`),
+      );
+    } else if (activeDungeon !== undefined) {
+      activity.append(el('span', 'squad-activity-text', `下本中:${activeDungeon.name}(${activeDungeon.tier}档)`));
+      activity.append(
+        el('span', 'squad-activity-sub', `每日 ${activeDungeon.runsPerDay} 次 · 难度 ${activeDungeon.difficultyTarget} · 掉落装等 ${activeDungeon.dropItemLevel} 档`),
       );
     } else {
       activity.append(el('span', 'squad-activity-text squad-activity-idle', '待命休整 · 疲劳自然恢复'));
@@ -578,9 +635,10 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
     return card;
   }
 
-  /** 日程页渲染:练级地图一览(两档风险表述)+ 小队分配(规则一律在 sim)。 */
+  /** 日程页渲染:结果卡 + 练级地图一览 + 小队分配 + 5 人本一览与下本分配(规则一律在 sim)。 */
   function renderSchedule(state: GameState): void {
     levelingAvgEl.textContent = `公会平均等级 ${guildAverageLevel(state.members)}`;
+    renderDungeonReport(state.lastDungeonRun);
 
     // 地图卡:收益/损耗差异明确标示,未解锁地图给出门槛(数值只读自内容表)
     const statuses = levelingMapStatuses(state.members);
@@ -613,50 +671,196 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
       assignListEl.replaceChildren(
         el('li', 'empty-hint', '还没有小队 —— 一切活动的出勤以小队为原子,先去「编成」页建队。'),
       );
+    } else {
+      const unlocked = statuses.filter((status) => status.unlocked);
+      assignListEl.replaceChildren(
+        ...state.squads.map((squad, index) => {
+          const current = squadLevelingMap(squad);
+          const row = el('li', 'assign-row');
+          row.dataset.squadId = String(squad.id);
+
+          const info = el('div', 'assign-info');
+          info.append(el('span', 'assign-name', `第 ${index + 1} 小队(${squad.memberIds.length}/${COMP.squadSize})`));
+          info.append(
+            el(
+              'span',
+              `assign-status${current !== undefined ? ' assign-status-active' : ''}`,
+              current !== undefined ? `练级中:${current.name}(${current.tier}区)` : '休整中 · 疲劳自然恢复',
+            ),
+          );
+          row.append(info);
+
+          if (unlocked.length > 0) {
+            const select = el('select', 'assign-select') as HTMLSelectElement;
+            for (const { def } of unlocked) {
+              const option = el('option', undefined, `${def.name}(${def.tier}区)`) as HTMLOptionElement;
+              option.value = def.id;
+              if (current?.id === def.id) {
+                option.selected = true;
+              }
+              select.append(option);
+            }
+            const go = el('button', 'pool-btn pool-btn-recruit', '前往练级');
+            go.type = 'button';
+            go.dataset.action = 'assign-leveling';
+            row.append(select, go);
+          }
+          if (current !== undefined) {
+            const stop = el('button', 'pool-btn pool-btn-reject', '停止练级');
+            stop.type = 'button';
+            stop.dataset.action = 'stop-leveling';
+            row.append(stop);
+          }
+          return row;
+        }),
+      );
+    }
+
+    // 5 人本一览:难度/掉落档位标示,未解锁给出门槛(数值只读自内容表)
+    const dungeonStates = dungeonStatuses(state.members);
+    dungeonListEl.replaceChildren(
+      ...dungeonStates.map(({ def, unlocked }) => {
+        const card = el('li', `map-card dungeon-card${unlocked ? '' : ' map-locked'}`);
+        const head = el('div', 'map-head');
+        head.append(el('span', 'map-name', def.name));
+        head.append(el('span', 'map-tier map-tier-dungeon', `${def.tier}档`));
+        card.append(head);
+        card.append(el('p', 'map-desc', def.description));
+        card.append(
+          el(
+            'div',
+            'map-stats',
+            `难度 ${def.difficultyTarget} · 每日 ${def.runsPerDay} 次 · 掉落装等 ${def.dropItemLevel} 档 · 疲劳 +${def.fatiguePerRun}/次`,
+          ),
+        );
+        if (!unlocked) {
+          card.append(
+            el(
+              'div',
+              'map-lock',
+              `未解锁 —— 需公会平均等级 ${def.unlockAverageLevel}(当前 ${guildAverageLevel(state.members)})`,
+            ),
+          );
+        }
+        return card;
+      }),
+    );
+
+    // 下本分配行:选择已解锁副本进驻,或停止下本回城休整
+    // (满职能与否只是展示性提示,裁决在门面)
+    if (state.squads.length === 0) {
+      dungeonAssignListEl.replaceChildren(
+        el('li', 'empty-hint', '还没有小队 —— 满职能小队(5 人 + 1 坦 1 奶)才能下本,先去「编成」页建队。'),
+      );
       return;
     }
-    const unlocked = statuses.filter((status) => status.unlocked);
-    assignListEl.replaceChildren(
+    const unlockedDungeons = dungeonStates.filter((status) => status.unlocked);
+    dungeonAssignListEl.replaceChildren(
       ...state.squads.map((squad, index) => {
-        const current = squadLevelingMap(squad);
+        const current = squadDungeon(squad);
+        const readiness = squadDungeonReadiness(squad, state.members);
         const row = el('li', 'assign-row');
         row.dataset.squadId = String(squad.id);
 
         const info = el('div', 'assign-info');
         info.append(el('span', 'assign-name', `第 ${index + 1} 小队(${squad.memberIds.length}/${COMP.squadSize})`));
-        info.append(
-          el(
-            'span',
-            `assign-status${current !== undefined ? ' assign-status-active' : ''}`,
-            current !== undefined ? `练级中:${current.name}(${current.tier}区)` : '休整中 · 疲劳自然恢复',
-          ),
-        );
+        if (current !== undefined) {
+          info.append(
+            el('span', 'assign-status assign-status-active', `下本中:${current.name}(${current.tier}档)`),
+          );
+        } else if (!readiness.ready) {
+          info.append(el('span', 'assign-status assign-status-blocked', `编成不齐:${readiness.reasons.join('、')}`));
+        } else {
+          info.append(el('span', 'assign-status', '休整中 · 可随时进本'));
+        }
         row.append(info);
 
-        if (unlocked.length > 0) {
+        if (unlockedDungeons.length > 0) {
           const select = el('select', 'assign-select') as HTMLSelectElement;
-          for (const { def } of unlocked) {
-            const option = el('option', undefined, `${def.name}(${def.tier}区)`) as HTMLOptionElement;
+          for (const { def } of unlockedDungeons) {
+            const option = el('option', undefined, `${def.name}(${def.tier}档)`) as HTMLOptionElement;
             option.value = def.id;
             if (current?.id === def.id) {
               option.selected = true;
             }
             select.append(option);
           }
-          const go = el('button', 'pool-btn pool-btn-recruit', '前往练级');
+          const go = el('button', 'pool-btn pool-btn-recruit', '前往下本');
           go.type = 'button';
-          go.dataset.action = 'assign-leveling';
+          go.dataset.action = 'assign-dungeon';
+          if (!readiness.ready) {
+            go.disabled = true; // 展示性禁用:真实裁决仍在门面
+            go.title = `编成不齐:${readiness.reasons.join('、')}`;
+          }
           row.append(select, go);
         }
         if (current !== undefined) {
-          const stop = el('button', 'pool-btn pool-btn-reject', '停止练级');
+          const stop = el('button', 'pool-btn pool-btn-reject', '停止下本');
           stop.type = 'button';
-          stop.dataset.action = 'stop-leveling';
+          stop.dataset.action = 'stop-dungeon';
           row.append(stop);
         }
         return row;
       }),
     );
+  }
+
+  /** 结果卡:最近一次下本的成败、三要素与掉落去向(数据来自状态,规则都在 sim)。 */
+  function renderDungeonReport(report: DungeonRunReport | undefined): void {
+    if (report === undefined) {
+      dungeonReportWrapEl.hidden = true;
+      return;
+    }
+    dungeonReportWrapEl.hidden = false;
+
+    const card = el('div', `dungeon-report-card${report.success ? ' report-win' : ' report-fail'}`);
+    const head = el('div', 'report-head');
+    head.append(el('span', 'report-title', `「${report.dungeonName}」· 第 ${report.squadOrdinal} 小队`));
+    head.append(el('span', 'report-stamp', formatGameStamp(report.atGameMinutes)));
+    card.append(head);
+
+    const banner = el('div', 'report-banner');
+    banner.append(el('span', 'report-verdict', report.success ? '速通' : '败退'));
+    banner.append(
+      el(
+        'span',
+        'report-odds',
+        `战力 ${Math.round(report.power)} 对难度 ${report.target} · 胜率 ${Math.round(report.successChance * 100)}%(${report.band})`,
+      ),
+    );
+    card.append(banner);
+
+    const lineup = el('ul', 'report-lineup');
+    for (const member of report.members) {
+      const li = el('li', 'report-member');
+      li.append(el('span', 'member-name', member.name));
+      li.append(el('span', 'report-member-role', member.role));
+      li.append(el('span', 'report-member-ilvl', `装等${member.itemLevel}`));
+      lineup.append(li);
+    }
+    card.append(lineup);
+
+    const drops = el('ul', 'report-drops');
+    if (report.drops.length === 0) {
+      drops.append(el('li', 'report-drop report-drop-none', '无掉落。'));
+    }
+    for (const drop of report.drops) {
+      const li = el('li', 'report-drop');
+      li.append(el('span', `gear-quality ${QUALITY_CLASS[drop.quality]}`, drop.quality));
+      li.append(el('span', 'report-drop-item', `${drop.slot} · 装等 ${drop.itemLevel}`));
+      li.append(
+        el(
+          'span',
+          `report-drop-dest${drop.equipped ? ' report-drop-up' : ''}`,
+          drop.equipped ? `${drop.assignedTo}(+${drop.upgradeDelta})` : '无人可提升,已分解',
+        ),
+      );
+      drops.append(li);
+    }
+    card.append(el('div', 'report-drops-title', '战利品'));
+    card.append(drops);
+
+    dungeonReportEl.replaceChildren(card);
   }
 
   /** 待命团员行:选择目标小队并编入(满员禁用是展示行为,裁决在门面)。 */

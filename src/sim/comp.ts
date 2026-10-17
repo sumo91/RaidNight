@@ -45,55 +45,65 @@ export interface SquadComposition {
 export function squadCompositions(state: GameState): readonly SquadComposition[] {
   const memberById = new Map(state.members.map((member) => [member.id, member]));
 
-  return state.squads.map((squad, index) => {
-    const members = squad.memberIds
+  return state.squads.map((squad, index) =>
+    composeSquad(squad, index + 1, squad.memberIds
       .map((id) => memberById.get(id))
-      .filter((member): member is Member => member !== undefined);
+      .filter((member): member is Member => member !== undefined)),
+  );
+}
 
-    // 职能结构:坦克/治疗/输出计数
-    const roleCounts: Record<Role, number> = { 坦克: 0, 治疗: 0, 输出: 0 };
-    for (const member of members) {
-      const role = memberRole(member);
-      if (role !== undefined) {
-        roleCounts[role] += 1;
-      }
+/**
+ * 计算一支小队的编成摘要(队内成员已解析):职能结构 / 缺口 / 光环预览。
+ * 编成页与活动结算(下本战力)共用;引用不存在的团员 id 会被跳过。
+ */
+export function composeSquad(
+  squad: Squad,
+  ordinal: number,
+  members: readonly Member[],
+): SquadComposition {
+  // 职能结构:坦克/治疗/输出计数
+  const roleCounts: Record<Role, number> = { 坦克: 0, 治疗: 0, 输出: 0 };
+  for (const member of members) {
+    const role = memberRole(member);
+    if (role !== undefined) {
+      roleCounts[role] += 1;
     }
+  }
 
-    // 缺口:对照小队职能结构与满员要求
-    const gaps: SquadGap[] = [];
-    const missingTanks = Math.max(0, COMP.squadStructure.minTanks - roleCounts['坦克']);
-    if (missingTanks > 0) {
-      gaps.push({ kind: '坦克', missing: missingTanks });
-    }
-    const missingHealers = Math.max(0, COMP.squadStructure.minHealers - roleCounts['治疗']);
-    if (missingHealers > 0) {
-      gaps.push({ kind: '治疗', missing: missingHealers });
-    }
-    const missingMembers = Math.max(0, COMP.squadSize - members.length);
-    if (missingMembers > 0) {
-      gaps.push({ kind: '满员', missing: missingMembers });
-    }
+  // 缺口:对照小队职能结构与满员要求
+  const gaps: SquadGap[] = [];
+  const missingTanks = Math.max(0, COMP.squadStructure.minTanks - roleCounts['坦克']);
+  if (missingTanks > 0) {
+    gaps.push({ kind: '坦克', missing: missingTanks });
+  }
+  const missingHealers = Math.max(0, COMP.squadStructure.minHealers - roleCounts['治疗']);
+  if (missingHealers > 0) {
+    gaps.push({ kind: '治疗', missing: missingHealers });
+  }
+  const missingMembers = Math.max(0, COMP.squadSize - members.length);
+  if (missingMembers > 0) {
+    gaps.push({ kind: '满员', missing: missingMembers });
+  }
 
-    // 小队光环:按职业去重(同职业不叠加),不同职业加成相加
-    const providersByClass = new Map<string, Member[]>();
-    for (const member of members) {
-      const list = providersByClass.get(member.classId) ?? [];
-      list.push(member);
-      providersByClass.set(member.classId, list);
+  // 小队光环:按职业去重(同职业不叠加),不同职业加成相加
+  const providersByClass = new Map<string, Member[]>();
+  for (const member of members) {
+    const list = providersByClass.get(member.classId) ?? [];
+    list.push(member);
+    providersByClass.set(member.classId, list);
+  }
+  const auras: ActiveAura[] = [];
+  const auraBonus: Record<AuraStat, number> = { 伤害: 0, 生存: 0, 治疗: 0 };
+  for (const [classId, providers] of providersByClass) {
+    const def = AURA_BY_CLASS.get(classId);
+    if (def === undefined) {
+      continue;
     }
-    const auras: ActiveAura[] = [];
-    const auraBonus: Record<AuraStat, number> = { 伤害: 0, 生存: 0, 治疗: 0 };
-    for (const [classId, providers] of providersByClass) {
-      const def = AURA_BY_CLASS.get(classId);
-      if (def === undefined) {
-        continue;
-      }
-      auras.push({ def, providers: providers.map((member) => member.name) });
-      auraBonus[def.stat] += def.percent;
-    }
+    auras.push({ def, providers: providers.map((member) => member.name) });
+    auraBonus[def.stat] += def.percent;
+  }
 
-    return { squad, ordinal: index + 1, members, roleCounts, gaps, auras, auraBonus };
-  });
+  return { squad, ordinal, members, roleCounts, gaps, auras, auraBonus };
 }
 
 /** 待命团员:名册中不在任何小队的成员。 */

@@ -1,8 +1,10 @@
 import { DAILY_FLAVOR_POOL } from '../content/daily-flavor';
 import { COMP } from '../content/comp';
+import { DUNGEON_BY_ID } from '../content/dungeons';
 import { LEVELING_MAP_BY_ID } from '../content/maps';
 import type { GuildCommand } from './commands';
 import { GAME_MINUTES_PER_DAY, GAME_MINUTES_PER_WEEK, gameDay, gameWeek } from './clock';
+import { settleDungeonDay, squadDungeon, squadDungeonReadiness } from './dungeon';
 import type { SimEvent, SimEventKind } from './events';
 import { guildAverageLevel } from './roster';
 import { settleLevelingDay, squadLevelingMap } from './leveling';
@@ -211,6 +213,51 @@ function applyCommand(state: GameState, command: GuildCommand, collector: EventC
       );
       return { ...state, squads };
     }
+    case 'assignDungeon': {
+      const index = state.squads.findIndex((squad) => squad.id === command.squadId);
+      if (index === -1) {
+        return state; // 小队不存在:忽略
+      }
+      const dungeon = DUNGEON_BY_ID.get(command.dungeonId);
+      if (dungeon === undefined) {
+        return state; // 副本不在内容表:忽略
+      }
+      // 解锁校验只发生在安排时刻(与练级地图同一规则)
+      if (guildAverageLevel(state.members) < dungeon.unlockAverageLevel) {
+        return state; // 未解锁:忽略
+      }
+      // 进本门槛:满职能小队(满员 5 人 + 至少 1 坦 1 奶)才可进驻
+      const readiness = squadDungeonReadiness(state.squads[index]!, state.members);
+      if (!readiness.ready) {
+        return state; // 编成不齐:忽略(编成页会标示缺口)
+      }
+      if (squadDungeon(state.squads[index]!)?.id === dungeon.id) {
+        return state; // 已在该副本:无变化、无事件
+      }
+      collector.push(
+        state.clockGameMinutes,
+        '下本',
+        `第 ${index + 1} 小队进驻「${dungeon.name}」(${dungeon.tier}档),每日自动下本 ${dungeon.runsPerDay} 次。`,
+      );
+      const squads = state.squads.map((squad, i) =>
+        i === index ? { ...squad, activity: { type: 'dungeon' as const, dungeonId: dungeon.id } } : squad,
+      );
+      return { ...state, squads };
+    }
+    case 'stopDungeon': {
+      const index = state.squads.findIndex((squad) => squad.id === command.squadId);
+      if (index === -1) {
+        return state; // 小队不存在:忽略
+      }
+      if (squadDungeon(state.squads[index]!) === undefined) {
+        return state; // 本就没有下本安排(或副本已失效):忽略
+      }
+      collector.push(state.clockGameMinutes, '下本', `第 ${index + 1} 小队结束下本,回城休整。`);
+      const squads = state.squads.map((squad, i) =>
+        i === index ? { ...squad, activity: undefined } : squad,
+      );
+      return { ...state, squads };
+    }
   }
 }
 
@@ -233,9 +280,10 @@ function advanceClock(state: GameState, delta: number, collector: EventCollector
   let members = state.members;
   let applicants = state.applicants;
   let nextApplicationId = state.nextApplicationId;
+  let lastDungeonRun = state.lastDungeonRun;
 
   // 逐个跨越的边界结算;游戏周边界必是游戏日边界(分钟数整除)。
-  // 日界结算顺序固定:日更文案 → 申请池刷新 → 练级/休整(自动层)→(周更)。
+  // 日界结算顺序固定:日更文案 → 申请池刷新 → 练级/休整 → 下本结算(自动层)→(周更)。
   for (;;) {
     const nextDayAt = (Math.floor(cursor / GAME_MINUTES_PER_DAY) + 1) * GAME_MINUTES_PER_DAY;
     const nextWeekAt = (Math.floor(cursor / GAME_MINUTES_PER_WEEK) + 1) * GAME_MINUTES_PER_WEEK;
@@ -256,17 +304,29 @@ function advanceClock(state: GameState, delta: number, collector: EventCollector
     nextApplicationId = pool.nextApplicationId;
     collector.push(nextAt, '招募', `申请池刷新:${applicants.length} 名冒险者递来了申请。`);
 
-    // 练级结算(自动层,静默计数):进驻地图的队员成长与积劳,其余全员休整
+    // 练级结算(自动层,静默计数):进驻地图的队员成长与积劳,其余无安排者休整
     const day = settleLevelingDay(members, state.squads, rngState);
     members = day.members;
     rngState = day.rngState;
+
+    // 下本结算(自动层,结果卡 + 短日志):进驻 5 人本的小队逐次结算、掉落择优穿戴
+    const dungeonDay = settleDungeonDay({
+      members,
+      squads: state.squads,
+      rngState,
+      atGameMinutes: nextAt,
+      emit: (text) => collector.push(nextAt, '下本', text),
+    });
+    members = dungeonDay.members;
+    rngState = dungeonDay.rngState;
+    lastDungeonRun = dungeonDay.lastReport ?? lastDungeonRun;
 
     if (nextAt === nextWeekAt) {
       collector.push(nextAt, '周更', `第 ${gameWeek(nextAt)} 周开始,团本 CD 已重置。`);
     }
   }
 
-  return { ...state, clockGameMinutes: target, rngState, members, applicants, nextApplicationId };
+  return { ...state, clockGameMinutes: target, rngState, members, applicants, nextApplicationId, lastDungeonRun };
 }
 
 /** 门面对象:封装当前状态,供装配层(UI)与测试驱动。 */

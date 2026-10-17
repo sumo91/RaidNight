@@ -15,8 +15,8 @@ import './ui/app.css';
 const SEED = 20261018;
 /** 存档键与格式版本(ADR-0003:格式版本化,升版走迁移)。 */
 const SAVE_KEY = 'wowidle.save';
-/** v2 = T5:团员新增经验(experience)维度,小队新增活动(activity)安排。 */
-const SAVE_VERSION = 2;
+/** v3 = T6:小队活动新增下本(dungeon)安排,状态新增最近下本结果(lastDungeonRun,可缺省)。 */
+const SAVE_VERSION = 3;
 /** 现实时钟采样间隔(毫秒);与游戏内节奏无关,只影响 UI 帧率。 */
 const TICK_INTERVAL_MS = 500;
 
@@ -41,9 +41,12 @@ function loadSave(): GameState | null {
     if (typeof file.state !== 'object' || file.state === null) {
       return null;
     }
-    // 升版走迁移(ADR-0003):v1(T4 及以前)→ v2 = 补经验字段(0 起步)
+    // 升版走迁移(ADR-0003):v1(T4 及以前)→ v2 = 补经验字段;v2 → v3 = 无必补字段
     if (file.version === 1) {
       return migrateV1(file.state as GameState);
+    }
+    if (file.version === 2) {
+      return migrateV2(file.state as GameState);
     }
     if (file.version !== SAVE_VERSION) {
       return null;
@@ -70,10 +73,15 @@ function loadSave(): GameState | null {
 
 /** v1 → v2 迁移:老档团员补经验维度(0);其余字段兼容(小队 activity 可缺省)。 */
 function migrateV1(state: GameState): GameState {
-  return {
+  return migrateV2({
     ...state,
     members: state.members.map((member) => ({ ...member, experience: member.experience ?? 0 })),
-  };
+  });
+}
+
+/** v2 → v3 迁移:下本相关字段全部可缺省(lastDungeonRun 缺省视为尚未下过本)。 */
+function migrateV2(state: GameState): GameState {
+  return { ...state, lastDungeonRun: state.lastDungeonRun ?? undefined };
 }
 
 /** 写入存档:存储不可用(隐私模式等)时静默降级为本局内存态。 */

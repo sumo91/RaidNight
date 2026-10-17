@@ -52,7 +52,8 @@ export interface LevelingDayResult {
  * 结算一个游戏日(自动层,确定性):
  * - 安排了练级地图的小队队员:获得经验(受疲劳效率修正)、可能阵亡
  *   (损失当日经验 + 额外疲劳)、积累疲劳、经验满则升级;
- * - 其余全员(待命或无安排小队):休整,疲劳自然恢复;
+ * - 无安排小队的团员(待命或未编队):休整,疲劳自然恢复;
+ * - 有其他活动安排的队员(如下本):既不练级也不休整,损耗由各自活动结算;
  * - 无任何练级安排时不消费随机链(阵亡判定逐人掷点,名册顺序即掷点顺序)。
  */
 export function settleLevelingDay(
@@ -62,7 +63,15 @@ export function settleLevelingDay(
 ): LevelingDayResult {
   // 团员 → 其小队当前进驻的地图(一名团员只在一支小队内)
   const mapByMember = new Map<number, LevelingMapDef>();
+  // 有活动安排的小队队员(练级之外的活动,如下本):不在本模块休整
+  const busyByMember = new Set<number>();
   for (const squad of squads) {
+    if (squad.activity === undefined) {
+      continue;
+    }
+    for (const memberId of squad.memberIds) {
+      busyByMember.add(memberId);
+    }
     const map = squadLevelingMap(squad);
     if (map === undefined) {
       continue;
@@ -79,6 +88,10 @@ export function settleLevelingDay(
   for (const member of members) {
     const map = mapByMember.get(member.id);
     if (map === undefined) {
+      if (busyByMember.has(member.id)) {
+        settled.push(member); // 其他活动(下本等)的损耗在各自结算里
+        continue;
+      }
       // 休整:疲劳只降不升,已归零则原样保留(不重建对象)
       if (member.fatigue > 0) {
         settled.push({
