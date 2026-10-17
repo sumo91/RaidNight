@@ -28,6 +28,8 @@ function synthMember(id: number, level: number, experience = 0, fatigue = 0): Me
     gear: [],
     mood: 80,
     loyalty: 80,
+    personalGold: 0,
+    dkp: 0,
     fatigue,
     attendance: { styleId: 'iron', baseRate: 95 },
     traits: [],

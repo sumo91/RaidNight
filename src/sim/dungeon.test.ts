@@ -49,6 +49,8 @@ function synthMember(
     gear: GEAR_SLOTS.map((slot) => ({ slot, quality: '白' as const, itemLevel })) as GearItem[],
     mood: 80,
     loyalty: 80,
+    personalGold: 0,
+    dkp: 0,
     fatigue: options?.fatigue ?? 0,
     attendance: { styleId: 'iron', baseRate: 95 },
     traits: [],

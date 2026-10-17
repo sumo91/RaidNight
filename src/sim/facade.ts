@@ -1,11 +1,13 @@
 import { DAILY_FLAVOR_POOL } from '../content/daily-flavor';
 import { COMP } from '../content/comp';
 import { DUNGEON_BY_ID } from '../content/dungeons';
+import { EXTERNAL_ACTIVITY_BY_ID, LOOT_SYSTEM_BY_ID, type ExternalActivityId } from '../content/economy';
 import { LEVELING_MAP_BY_ID } from '../content/maps';
 import { RAID_BY_ID } from '../content/raids';
 import type { GuildCommand } from './commands';
 import { GAME_MINUTES_PER_DAY, GAME_MINUTES_PER_WEEK, gameDay, gameWeek } from './clock';
 import { settleDungeonDay, squadDungeon, squadDungeonReadiness } from './dungeon';
+import { settleExternalDay, squadExternalActivity } from './economy';
 import type { SimEvent, SimEventKind } from './events';
 import { evaluateUnlockGates } from './ladder';
 import { teamCheck } from './comp';
@@ -14,7 +16,14 @@ import { settleLevelingDay, squadLevelingMap } from './leveling';
 import { settleRaidNight } from './raid';
 import { generateApplicantPool } from './recruit';
 import { pickOne } from './rng';
-import { createInitialState, normalizeGuildName, type GameState, type Member, type Squad } from './state';
+import {
+  createInitialState,
+  normalizeGuildName,
+  type GameState,
+  type GuildEconomy,
+  type Member,
+  type Squad,
+} from './state';
 
 // 存档 API 经门面接缝对外暴露(ADR-0003:版本化 + 迁移;纯函数见 sim/save.ts)
 export {
@@ -315,7 +324,130 @@ function applyCommand(state: GameState, command: GuildCommand, collector: EventC
       collector.push(state.clockGameMinutes, '团本', '取消开团安排,本周不开团。');
       return { ...state, raidPlan: undefined };
     }
+    case 'assignCarry':
+    case 'assignWildRaid':
+      return assignExternal(
+        state,
+        command.type === 'assignCarry' ? 'carry' : 'wildRaid',
+        command.squadId,
+        collector,
+      );
+    case 'stopCarry':
+    case 'stopWildRaid': {
+      const wanted: ExternalActivityId = command.type === 'stopCarry' ? 'carry' : 'wildRaid';
+      const index = state.squads.findIndex((squad) => squad.id === command.squadId);
+      const current = index === -1 ? undefined : squadExternalActivity(state.squads[index]!);
+      if (current === undefined || current.id !== wanted) {
+        return state; // 小队不存在或本就没有这项外快:忽略
+      }
+      collector.push(
+        state.clockGameMinutes,
+        '经济',
+        `第 ${index + 1} 小队结束${current.name},回城休整。`,
+      );
+      const squads = state.squads.map((squad, i) =>
+        i === index ? { ...squad, activity: undefined } : squad,
+      );
+      return { ...state, squads };
+    }
+    case 'setLootSystem': {
+      const def = LOOT_SYSTEM_BY_ID.get(command.system);
+      if (def === undefined || def.id === state.economy.system) {
+        return state; // 未知制度或本就是现行制度:忽略
+      }
+      if (state.vault.gold < def.switchCostGold) {
+        return state; // 立规费付不起:换不成(转换成本是真实的,验收标准 3)
+      }
+      const vault = { ...state.vault, gold: state.vault.gold - def.switchCostGold };
+      // 换制摩擦:全员(会长角色除外)忠诚一次性下降(0-100 钳制)
+      const members = state.members.map((member) =>
+        member.isChairman
+          ? member
+          : { ...member, loyalty: Math.max(0, member.loyalty - def.switchLoyaltyHit) },
+      );
+      // 换入 DKP:积分清零重记(旧分随旧制度作废 —— 换制的真实代价之一)
+      const settled = def.id === 'dkp' ? members.map((member) => ({ ...member, dkp: 0 })) : members;
+      // 自肥只存在于会长裁量制:换出即自动收手
+      const economy: GuildEconomy = {
+        ...state.economy,
+        system: def.id,
+        systemSinceGameMinutes: state.clockGameMinutes,
+        selfDealing: def.id === 'chairman' ? state.economy.selfDealing : false,
+      };
+      const costParts = [
+        `立规支出 ${def.switchCostGold} 金(金库余 ${vault.gold})`,
+        `全员忠诚 −${def.switchLoyaltyHit}`,
+      ];
+      if (def.id === 'dkp') {
+        costParts.push('DKP 清零重记');
+      }
+      collector.push(
+        state.clockGameMinutes,
+        '经济',
+        `分配制度改为「${def.name}」:${costParts.join(',')}。`,
+      );
+      return { ...state, vault, members: settled, economy };
+    }
+    case 'setSelfDealing': {
+      if (state.economy.system !== 'chairman' || state.economy.selfDealing === command.enabled) {
+        return state; // 自肥只在会长裁量制下存在;开关无变化:忽略
+      }
+      const def = LOOT_SYSTEM_BY_ID.get('chairman')!;
+      const economy: GuildEconomy = { ...state.economy, selfDealing: command.enabled };
+      collector.push(
+        state.clockGameMinutes,
+        '经济',
+        command.enabled
+          ? `会长宣布实行自肥:团本掉落优先装进会长角色 —— 每件自肥,出席者忠诚 −${def.selfDealLoyaltyCost}、声望 −${def.selfDealReputationCost},代价逐件累积。`
+          : '会长收手了:自肥结束,掉落回到正常裁量。',
+      );
+      return { ...state, economy };
+    }
   }
+}
+
+/**
+ * 安排外快(G团打工/野团,GLOSSARY:打工/野团):
+ * 小队存在 + 内容解锁 + 满职能(与下本同一门槛)才成立;已在同一外快则无变化。
+ * 收入归个人金(GLOSSARY:个人金),结算在 sim/economy.ts 的逐日外快结算。
+ */
+function assignExternal(
+  state: GameState,
+  activityId: ExternalActivityId,
+  squadId: number,
+  collector: EventCollector,
+): GameState {
+  const index = state.squads.findIndex((squad) => squad.id === squadId);
+  if (index === -1) {
+    return state; // 小队不存在:忽略
+  }
+  const def = EXTERNAL_ACTIVITY_BY_ID.get(activityId);
+  if (def === undefined) {
+    return state; // 活动不在内容表:忽略
+  }
+  const unlock = evaluateUnlockGates(def.unlock, {
+    averageLevel: guildAverageLevel(state.members),
+    averageItemLevel: guildAverageItemLevel(state.members),
+  });
+  if (!unlock.unlocked) {
+    return state; // 未解锁:忽略
+  }
+  const readiness = squadDungeonReadiness(state.squads[index]!, state.members);
+  if (!readiness.ready) {
+    return state; // 编成不齐:忽略(编成页会标示缺口)
+  }
+  if (squadExternalActivity(state.squads[index]!)?.id === def.id) {
+    return state; // 已在该外快:无变化、无事件
+  }
+  collector.push(
+    state.clockGameMinutes,
+    '经济',
+    `第 ${index + 1} 小队出坞${def.name}:每人每日 +${def.goldPerMemberPerDay} 金入个人金,疲劳 +${def.fatiguePerMemberPerDay}。`,
+  );
+  const squads = state.squads.map((squad, i) =>
+    i === index ? { ...squad, activity: { type: activityId } } : squad,
+  );
+  return { ...state, squads };
 }
 
 /** 从所有小队移除一名团员(保持小队顺序与队内顺序;返回新数组)。 */
@@ -339,11 +471,13 @@ function advanceClock(state: GameState, delta: number, collector: EventCollector
   let nextApplicationId = state.nextApplicationId;
   let lastDungeonRun = state.lastDungeonRun;
   let vault = state.vault;
+  let economy = state.economy;
+  let reputation = state.reputation;
   let raidPlan = state.raidPlan;
   let lastRaidNight = state.lastRaidNight;
 
   // 逐个跨越的边界结算;游戏周边界必是游戏日边界(分钟数整除)。
-  // 日界结算顺序固定:日更文案 → 申请池刷新 → 练级/休整 → 下本结算(自动层)
+  // 日界结算顺序固定:日更文案 → 申请池刷新 → 练级/休整 → 下本结算 → 外快结算(自动层)
   // →(周界)团本夜整夜结算 → 周更(团本 CD 重置)。
   for (;;) {
     const nextDayAt = (Math.floor(cursor / GAME_MINUTES_PER_DAY) + 1) * GAME_MINUTES_PER_DAY;
@@ -382,6 +516,15 @@ function advanceClock(state: GameState, delta: number, collector: EventCollector
     rngState = dungeonDay.rngState;
     lastDungeonRun = dungeonDay.lastReport ?? lastDungeonRun;
 
+    // 外快结算(自动层,短日志):打工/野团小队的个人金收入(GLOSSARY:个人金)
+    const externalDay = settleExternalDay({
+      members,
+      squads: state.squads,
+      atGameMinutes: nextAt,
+      emit: (text) => collector.push(nextAt, '经济', text),
+    });
+    members = externalDay.members;
+
     if (nextAt === nextWeekAt) {
       // 团本夜(计划层):开团安排在周边界整夜结算(直播视图数据 + 战斗日志);
       // 夜结束安排即清空 —— 团本 CD = 游戏周,下周重新开团
@@ -390,6 +533,8 @@ function advanceClock(state: GameState, delta: number, collector: EventCollector
           members,
           squads: state.squads,
           vault,
+          economy,
+          reputation,
           plan: raidPlan,
           rngState,
           atGameMinutes: nextAt,
@@ -397,6 +542,8 @@ function advanceClock(state: GameState, delta: number, collector: EventCollector
         });
         members = raidNight.members;
         vault = raidNight.vault;
+        economy = raidNight.economy;
+        reputation = raidNight.reputation;
         rngState = raidNight.rngState;
         lastRaidNight = raidNight.report ?? lastRaidNight;
         raidPlan = undefined;
@@ -414,6 +561,8 @@ function advanceClock(state: GameState, delta: number, collector: EventCollector
     nextApplicationId,
     lastDungeonRun,
     vault,
+    economy,
+    reputation,
     raidPlan,
     lastRaidNight,
   };

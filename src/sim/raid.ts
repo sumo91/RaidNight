@@ -15,16 +15,23 @@
  */
 
 import { RAID_BY_ID, RAID_DROP_QUALITY, RAID_SETTLEMENT, RAIDS, type RaidDef } from '../content/raids';
+import { LOOT_SYSTEM_BY_ID } from '../content/economy';
 import { LEVELING } from '../content/maps';
 import type { Role } from '../content/classes';
 import { composeSquad, memberRole, teamCheckOf } from './comp';
-import { bestWearer, equipItem, rollDropItems } from './dungeon';
+import { rollDropItems } from './dungeon';
+import {
+  applyLootSystemNightEffects,
+  accrueDkpOnKill,
+  distributeRaidDrop,
+} from './economy';
 import { assessEncounter } from './encounter';
 import { evaluateUnlockGates } from './ladder';
 import { averageItemLevel, guildAverageItemLevel, guildAverageLevel } from './roster';
 import { nextFloat } from './rng';
 import type {
   DropOutcome,
+  GuildEconomy,
   GuildVault,
   Member,
   RaidBossOutcome,
@@ -106,6 +113,10 @@ export interface SettleRaidNightParams {
   readonly members: readonly Member[];
   readonly squads: readonly Squad[];
   readonly vault: GuildVault;
+  /** 公会经济:现行分配制度与自肥开关(T11;掉落归属按此结算)。 */
+  readonly economy: GuildEconomy;
+  /** 声望(桩值,T12 接真):自肥的声望代价从这里扣减。 */
+  readonly reputation: number;
   readonly plan: RaidPlan;
   readonly rngState: number;
   /** 团本夜时刻(= 游戏周边界;报告与日志的时刻)。 */
@@ -116,6 +127,10 @@ export interface SettleRaidNightParams {
 export interface SettleRaidNightResult {
   readonly members: readonly Member[];
   readonly vault: GuildVault;
+  /** 经济面回写:自肥件数与声望代价累积(T11)。 */
+  readonly economy: GuildEconomy;
+  /** 声望回写(自肥代价扣减后,下限 0)。 */
+  readonly reputation: number;
   readonly rngState: number;
   /** 整夜结算的报告(直播视图数据);夜被取消(检查未过/内容失效)时为 undefined。 */
   readonly report?: RaidNightReport;
@@ -133,7 +148,7 @@ export function settleRaidNight(params: SettleRaidNightParams): SettleRaidNightR
   const raid = RAID_BY_ID.get(plan.raidId);
   if (raid === undefined) {
     emit(`团本安排失效:安排的团本已不在团本表中,本周不开团。`);
-    return { members: params.members, vault, rngState: params.rngState };
+    return { members: params.members, vault, economy: params.economy, reputation: params.reputation, rngState: params.rngState };
   }
 
   // 开团复核①:内容阶梯门槛(开团后名册回落则取消 —— 未达标不可进入)
@@ -143,7 +158,7 @@ export function settleRaidNight(params: SettleRaidNightParams): SettleRaidNightR
   });
   if (!unlock.unlocked) {
     emit(`团本夜取消:「${raid.name}」门槛未达(${unlock.unmet.join('、')}),本周不开团。`);
-    return { members: params.members, vault, rngState: params.rngState };
+    return { members: params.members, vault, economy: params.economy, reputation: params.reputation, rngState: params.rngState };
   }
 
   // 开团复核②:团队检查(开团后淘汰/调离导致阵容不齐则取消,不算团灭)
@@ -152,15 +167,24 @@ export function settleRaidNight(params: SettleRaidNightParams): SettleRaidNightR
     emit(
       `团本夜取消:团队检查未通过(${check.failures.map((f) => f.text).join('、')}),补齐编成后下周再战。`,
     );
-    return { members: params.members, vault, rngState: params.rngState };
+    return { members: params.members, vault, economy: params.economy, reputation: params.reputation, rngState: params.rngState };
   }
+
+  // 现行分配制度(防御:状态里的制度 id 不在内容表时回落默认裁量)
+  const system = LOOT_SYSTEM_BY_ID.get(params.economy.system) ?? LOOT_SYSTEM_BY_ID.get('chairman')!;
 
   let rngState = params.rngState;
   let members = params.members;
   let currentVault = vault;
+  // 分配结算的整夜累计(自肥件数/声望代价;金库入账由 incomeTotal 差值得出)
+  let nightSelfDealt = 0;
+  let reputationCostTotal = 0;
+  let personalGoldOut = 0;
 
   const team = raidTeam(members, squads);
   const teamIds = new Set(team.members.map((member) => member.id));
+  /** 出战阵容的团员 id 顺序(分配时按当前名册重新解析,换装结果逐件可见)。 */
+  const teamOrderIds = team.members.map((member) => member.id);
   const chancePercent = (value: number) => Math.round(value * 100);
 
   emit(
@@ -215,7 +239,10 @@ export function settleRaidNight(params: SettleRaidNightParams): SettleRaidNightR
       emit(
         `「${boss.name}」被击杀:战力 ${Math.round(assessment.power)} 对难度 ${assessment.target}(胜率 ${chancePercent(successChance)}%)${fallen > 0 ? `,${fallen} 人倒下又被拉起` : ''}。`,
       );
-      // 胜利掉落 → 全团择优穿戴(逐件结算,后一件看到前一件的换装结果)
+      // DKP 制:击杀记分(先出勤记分,再花分拿装)
+      members = accrueDkpOnKill(members, teamIds, system);
+
+      // 胜利掉落 → 按现行分配制度归属(逐件结算,后一件看到前一件的结果)
       const [dropped, afterDrops] = rollDropItems(
         rngState,
         RAID_DROP_QUALITY,
@@ -226,31 +253,31 @@ export function settleRaidNight(params: SettleRaidNightParams): SettleRaidNightR
       rngState = afterDrops;
       const outcomesOfDrop: DropOutcome[] = [];
       for (const item of dropped) {
-        const candidates = members.filter((member) => teamIds.has(member.id));
-        const best = bestWearer(candidates, item);
-        if (best.delta > 0) {
-          members = members.map((member) =>
-            member.id === best.member.id ? equipItem(member, item) : member,
-          );
-          outcomesOfDrop.push({
-            slot: item.slot,
-            quality: item.quality,
-            itemLevel: item.itemLevel,
-            equipped: true,
-            assignedTo: best.member.name,
-            upgradeDelta: best.delta,
-          });
-          emit(
-            `团本掉落:${item.quality}·${item.slot}(装等 ${item.itemLevel})→ ${best.member.name} 换上(+${best.delta})。`,
-          );
-        } else {
-          outcomesOfDrop.push({
-            slot: item.slot,
-            quality: item.quality,
-            itemLevel: item.itemLevel,
-            equipped: false,
-          });
-          emit(`团本掉落:${item.quality}·${item.slot}(装等 ${item.itemLevel})无人可提升,随手分解。`);
+        const lineup = teamOrderIds
+          .map((id) => members.find((member) => member.id === id))
+          .filter((member): member is Member => member !== undefined);
+        const allocation = distributeRaidDrop({
+          members,
+          team: lineup,
+          item,
+          system,
+          selfDealing: params.economy.selfDealing,
+          vault: currentVault,
+        });
+        members = allocation.members;
+        currentVault = allocation.vault;
+        nightSelfDealt += allocation.selfDealt ? 1 : 0;
+        reputationCostTotal += allocation.reputationCost;
+        personalGoldOut += allocation.outcome.goldPaid ?? 0;
+        outcomesOfDrop.push({
+          slot: item.slot,
+          quality: item.quality,
+          itemLevel: item.itemLevel,
+          system: system.id,
+          ...allocation.outcome,
+        });
+        if (allocation.line !== undefined) {
+          emit(allocation.line);
         }
       }
       drops = outcomesOfDrop;
@@ -264,6 +291,7 @@ export function settleRaidNight(params: SettleRaidNightParams): SettleRaidNightR
       currentVault = {
         gold: currentVault.gold - repairGold,
         repairSpent: currentVault.repairSpent + repairGold,
+        incomeTotal: currentVault.incomeTotal,
       };
       const wipeFatigue = RAID_SETTLEMENT.wipeFatigue;
       const moodHit = RAID_SETTLEMENT.wipeMoodHit;
@@ -333,6 +361,21 @@ export function settleRaidNight(params: SettleRaidNightParams): SettleRaidNightR
     );
   }
 
+  // 夜末制度心态(出席团员;会长角色的忠诚不随制度波动)+ 分配小结
+  members = applyLootSystemNightEffects(members, teamIds, system);
+  const vaultGoldIn = currentVault.incomeTotal - vault.incomeTotal;
+  const signed = (value: number) => (value >= 0 ? `+${value}` : `${value}`);
+  const moodPart = system.attendeeMoodPerNight === 0 ? '心情不变' : `心情 ${signed(system.attendeeMoodPerNight)}`;
+  const loyaltyPart =
+    system.attendeeLoyaltyPerNight === 0
+      ? '忠诚不变'
+      : `出席者忠诚 ${signed(system.attendeeLoyaltyPerNight)}`;
+  const goldPart = vaultGoldIn > 0 ? `金库入账 ${vaultGoldIn} 金、全团分红` : '金币未流动';
+  emit(`本夜分配:「${system.name}」—— ${[loyaltyPart, moodPart, goldPart].join('、')}。`);
+  if (nightSelfDealt > 0) {
+    emit(`自肥 ${nightSelfDealt} 件:出席者忠诚逐件受损,声望 −${reputationCostTotal}(代价累积可见)。`);
+  }
+
   const report: RaidNightReport = {
     raidId: raid.id,
     raidName: raid.name,
@@ -356,7 +399,26 @@ export function settleRaidNight(params: SettleRaidNightParams): SettleRaidNightR
         }
       : undefined,
     repairGold: repairGoldTotal,
+    loot: {
+      system: system.id,
+      vaultGoldIn,
+      personalGoldOut,
+      selfDealtCount: nightSelfDealt,
+      attendeeLoyaltyPerNight: system.attendeeLoyaltyPerNight,
+      attendeeMoodPerNight: system.attendeeMoodPerNight,
+    },
   };
 
-  return { members, vault: currentVault, rngState, report };
+  return {
+    members,
+    vault: currentVault,
+    economy: {
+      ...params.economy,
+      selfDealtCount: params.economy.selfDealtCount + nightSelfDealt,
+      selfDealReputationPaid: params.economy.selfDealReputationPaid + reputationCostTotal,
+    },
+    reputation: Math.max(0, params.reputation - reputationCostTotal),
+    rngState,
+    report,
+  };
 }

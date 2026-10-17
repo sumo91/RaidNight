@@ -139,6 +139,8 @@ export function generateMemberProfile(
       mood,
       loyalty,
       fatigue,
+      personalGold: 0, // 入册身无分文:个人金从打工与野团挣起(GLOSSARY:个人金)
+      dkp: 0, // 出勤积分从 0 记起(仅 DKP 制下增减)
       attendance,
       traits,
       skillTierId: tier.id,

@@ -27,6 +27,8 @@ function synthMember(id: number, classId: string, specId: string): Member {
     gear: [],
     mood: 80,
     loyalty: 80,
+    personalGold: 0,
+    dkp: 0,
     fatigue: 0,
     attendance: { styleId: 'iron', baseRate: 95 },
     traits: [],

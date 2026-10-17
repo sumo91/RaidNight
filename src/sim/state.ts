@@ -2,7 +2,7 @@ import { GUILD_NAME_MAX_LENGTH } from './commands';
 import type { EncounterBand } from './encounter';
 import { generateFoundingRoster } from './member-gen';
 import { generateApplicantPool } from './recruit';
-import { VAULT } from '../content/economy';
+import { DEFAULT_LOOT_SYSTEM, VAULT, type LootSystemId } from '../content/economy';
 import { RECRUIT } from '../content/recruit';
 import type { GearSlot, Quality } from '../content/gear';
 
@@ -25,6 +25,10 @@ export interface MemberProfile {
   readonly loyalty: number;
   /** 疲劳(0-100) */
   readonly fatigue: number;
+  /** 个人金(GLOSSARY):打工与野团所得归此;GKP 制下用于团本出价 */
+  readonly personalGold: number;
+  /** DKP 余额:仅 DKP 制下增减(击杀记分/拿装扣分);允许负账 */
+  readonly dkp: number;
   /** 出勤画像:风格 + 基础出勤率 */
   readonly attendance: AttendanceProfile;
   /** 性格标签 id(1–2 个) */
@@ -65,12 +69,16 @@ export interface Squad {
   readonly activity?: SquadActivity;
 }
 
-/** 小队活动:练级(进驻地图)/ 下本(进驻 5 人本);后续工单(团本等)在此扩展类型。 */
+/** 小队活动:练级(进驻地图)/ 下本(进驻 5 人本)/ 外快(打工/野团);后续工单在此扩展类型。 */
 export type SquadActivity =
   /** 练级:进驻某张练级地图,自动层逐日结算 */
   | { readonly type: 'leveling'; readonly mapId: string }
   /** 下本:进驻某座 5 人本,自动层逐日按 runsPerRun 结算(规则见 sim/dungeon.ts) */
-  | { readonly type: 'dungeon'; readonly dungeonId: string };
+  | { readonly type: 'dungeon'; readonly dungeonId: string }
+  /** G团打工:整队出坞替别家金团出力,收入归个人金(规则见 sim/economy.ts) */
+  | { readonly type: 'carry' }
+  /** 野团:整队跑临时混合团,收入归个人金(规则见 sim/economy.ts) */
+  | { readonly type: 'wildRaid' };
 
 /** 单件装备:部位 + 品质 + 装等(物品表见后续装备工单)。 */
 export interface GearItem {
@@ -79,17 +87,27 @@ export interface GearItem {
   readonly itemLevel: number;
 }
 
-/** 一件掉落的去向:自动择优穿戴的结果(equipped = false 表示无人可提升,已分解)。 */
+/** 一件掉落的去向:5 人本为自动择优穿戴;团本按分配制度归属(经济字段见 sim/economy.ts)。 */
 export interface DropOutcome {
   readonly slot: GearSlot;
   readonly quality: Quality;
   readonly itemLevel: number;
-  /** 是否被穿上(择优:全队该部位提升最大者) */
+  /** 是否被穿上(择优/制度分配;false = 无人可提升或流拍,已分解) */
   readonly equipped: boolean;
   /** 换装团员名(equipped 时必有) */
   readonly assignedTo?: string;
   /** 该部位装等提升值(equipped 时必为正) */
   readonly upgradeDelta?: number;
+  /** 分配制度(团本掉落才有;5 人本自动择优不填) */
+  readonly system?: LootSystemId;
+  /** GKP 成交价(赢家实付个人金;仅 GKP 制) */
+  readonly goldPaid?: number;
+  /** DKP 扣分(仅 DKP 制;负账可能) */
+  readonly dkpPaid?: number;
+  /** 自肥件(会长裁量制 + 自肥生效) */
+  readonly selfDealt?: boolean;
+  /** 未穿戴原因(缺省 = 无人可提升;流拍 = 出不起价) */
+  readonly unequippedReason?: '流拍';
 }
 
 /** 一次下本的结果卡数据(结构化快照;过程要点同时以「下本」事件进短日志)。 */
@@ -119,15 +137,45 @@ export interface AttendanceProfile {
 }
 
 /**
- * 公会金库(GLOSSARY)的最小实现(T10):余额 + 历史修理支出累计。
- * 完整经济(收入、分配制度、个人金)在 T11 经济工单 —— 届时扩字段,
- * 旧存档经版本迁移补缺省。
+ * 公会金库(GLOSSARY):余额 + 收支两向的历史累计。
+ * 收入面:GKP 制成交抽成(T11);支出面:修理金(T10)、
+ * 消耗品/招募/建设(后续工单)。
  */
 export interface GuildVault {
   /** 当前余额(金币)。 */
   readonly gold: number;
   /** 历史修理支出累计(团灭代价;只增不减)。 */
   readonly repairSpent: number;
+  /** 历史收入累计(GKP 抽成等;只增不减)。 */
+  readonly incomeTotal: number;
+}
+
+/**
+ * 公会经济(T11,GLOSSARY:分配制度/自肥):
+ * 双钱包的「钱包侧」在团员(personalGold)与金库;此处是制度侧。
+ */
+export interface GuildEconomy {
+  /** 当前分配制度(新会默认 会长裁量;可换制,成本见内容表)。 */
+  readonly system: LootSystemId;
+  /** 现行制度生效时刻(游戏分钟;展示用)。 */
+  readonly systemSinceGameMinutes: number;
+  /** 自肥开关(GLOSSARY:自肥):仅会长裁量制下可为 true;换出该制度即自动关闭。 */
+  readonly selfDealing: boolean;
+  /** 历史自肥件数(忠诚/声望代价随件累积,此处可见累计)。 */
+  readonly selfDealtCount: number;
+  /** 历史自肥的声望代价累计(声望为桩值,T12 接真值;先记价可累积)。 */
+  readonly selfDealReputationPaid: number;
+}
+
+/** 建会(或旧档迁移)时的初始经济:会长裁量制、不自肥。 */
+export function createInitialEconomy(clockGameMinutes: number): GuildEconomy {
+  return {
+    system: DEFAULT_LOOT_SYSTEM,
+    systemSinceGameMinutes: clockGameMinutes,
+    selfDealing: false,
+    selfDealtCount: 0,
+    selfDealReputationPaid: 0,
+  };
 }
 
 /**
@@ -194,6 +242,24 @@ export interface RaidNightReport {
   readonly wipe?: RaidWipe;
   /** 本夜修理金合计(实付;全通为 0)。 */
   readonly repairGold: number;
+  /** 本夜分配结算摘要(T11:双钱包流向与制度代价;夜被取消时无报告)。 */
+  readonly loot?: RaidLootFlow;
+}
+
+/** 团本夜的分配结算摘要:三种制度的金币流向与忠诚/心情代价对照(金库页与测试断言共用)。 */
+export interface RaidLootFlow {
+  /** 本夜适用的分配制度。 */
+  readonly system: LootSystemId;
+  /** 本夜入金库金币(GKP 抽成与零头;他制为 0)。 */
+  readonly vaultGoldIn: number;
+  /** 本夜个人金支出合计(GKP 成交价合计;他制为 0)。 */
+  readonly personalGoldOut: number;
+  /** 本夜自肥件数。 */
+  readonly selfDealtCount: number;
+  /** 夜末出席团员的忠诚调整(制度心态,内容表;会长角色除外)。 */
+  readonly attendeeLoyaltyPerNight: number;
+  /** 夜末出席团员的心情调整(内容表)。 */
+  readonly attendeeMoodPerNight: number;
 }
 
 /** 公会信息:玩家管理的核心成长主体。 */
@@ -234,8 +300,10 @@ export interface GameState {
   readonly nextApplicationId: number;
   /** 最近一次下本的结果卡数据(结构化;历史过程见事件日志的「下本」条目) */
   readonly lastDungeonRun?: DungeonRunReport;
-  /** 公会金库(最小实现:T10 余额 + 修理支出;经济面在 T11)。 */
+  /** 公会金库(GLOSSARY:双钱包的公家一侧)。 */
   readonly vault: GuildVault;
+  /** 公会经济:分配制度与自肥(T11,GLOSSARY:分配制度/自肥)。 */
+  readonly economy: GuildEconomy;
   /** 当前开团安排(缺省 = 本周未开团;团本夜 = 下一个游戏周边界)。 */
   readonly raidPlan?: RaidPlan;
   /** 最近一次团本夜的结算报告(结构化;过程见事件日志的「团本」条目) */
@@ -271,7 +339,8 @@ export function createInitialState(seed: number, guildName?: string): GameState 
     applicants: pool.applicants,
     nextApplicationId: pool.nextApplicationId,
     lastDungeonRun: undefined,
-    vault: { gold: VAULT.startingGold, repairSpent: 0 },
+    vault: { gold: VAULT.startingGold, repairSpent: 0, incomeTotal: 0 },
+    economy: createInitialEconomy(0),
     raidPlan: undefined,
     lastRaidNight: undefined,
     nextEventSeq: 1,

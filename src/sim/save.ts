@@ -9,7 +9,7 @@
  */
 
 import { VAULT } from '../content/economy';
-import type { GameState } from './state';
+import { createInitialEconomy, type GameState } from './state';
 
 /** 存档种类标记:v4 起写入封皮,导入时先验校验(不是本游戏的文件 → 拒绝)。 */
 export const SAVE_KIND = 'wowidle-save';
@@ -24,9 +24,12 @@ export const SAVE_KIND = 'wowidle-save';
  * - v5(T9):封皮新增 savedAtMs(存档落盘的现实毫秒时间戳,离线结算的起测点,
  *   ADR-0003「基于时间戳推进、离线结算幂等」;可缺省 = 0,不触发补结算);
  * - v6(T10):状态新增公会金库 vault(最小金库:余额 + 修理支出;旧档按建会
- *   起始余额补);开团安排 raidPlan 与最近团本夜 lastRaidNight 可缺省。
+ *   起始余额补);开团安排 raidPlan 与最近团本夜 lastRaidNight 可缺省;
+ * - v7(T11):经济面 —— 团员新增个人金(personalGold)与 DKP(dkp),金库新增
+ *   历史收入累计(incomeTotal),状态新增经济 economy(分配制度/自肥,旧档
+ *   补建会默认:会长裁量制、不自肥);小队活动含外快(carry/wildRaid)。
  */
-export const SAVE_VERSION = 6;
+export const SAVE_VERSION = 7;
 
 /** 版本化存档封皮:v1–v3 的本机旧档没有 kind,读入时视为 legacy。 */
 export interface SaveFile {
@@ -61,6 +64,22 @@ const MIGRATIONS: Readonly<Record<number, Migration>> = {
   5: (state) => ({
     ...state,
     vault: state.vault ?? { gold: VAULT.startingGold, repairSpent: 0 },
+  }),
+  // v6 → v7:补经济面(个人金/DKP 从 0 起;金库收入累计从 0 计;经济补建会默认)
+  6: (state) => ({
+    ...state,
+    members: Array.isArray(state.members)
+      ? state.members.map((member) => ({
+          ...member,
+          personalGold: member.personalGold ?? 0,
+          dkp: member.dkp ?? 0,
+        }))
+      : state.members,
+    vault:
+      state.vault !== undefined
+        ? { ...state.vault, incomeTotal: state.vault.incomeTotal ?? 0 }
+        : { gold: VAULT.startingGold, repairSpent: 0, incomeTotal: 0 },
+    economy: state.economy ?? createInitialEconomy(state.clockGameMinutes ?? 0),
   }),
 };
 
@@ -147,7 +166,13 @@ function looksLikeGameState(state: GameState): boolean {
     typeof state.vault !== 'object' ||
     state.vault === null ||
     typeof state.vault.gold !== 'number' ||
-    typeof state.vault.repairSpent !== 'number'
+    typeof state.vault.repairSpent !== 'number' ||
+    typeof state.vault.incomeTotal !== 'number' ||
+    typeof state.economy !== 'object' ||
+    state.economy === null ||
+    typeof state.economy.system !== 'string' ||
+    typeof state.economy.selfDealing !== 'boolean' ||
+    typeof state.economy.selfDealtCount !== 'number'
   ) {
     return false;
   }
@@ -161,6 +186,8 @@ function looksLikeGameState(state: GameState): boolean {
         typeof member.name === 'string' &&
         typeof member.level === 'number' &&
         typeof member.experience === 'number' &&
+        typeof member.personalGold === 'number' &&
+        typeof member.dkp === 'number' &&
         Array.isArray(member.gear),
     ) &&
     state.squads.every((squad) => typeof squad.id === 'number' && Array.isArray(squad.memberIds)) &&

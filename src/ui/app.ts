@@ -1,6 +1,12 @@
 import { ATTENDANCE_BY_ID } from '../content/attendance';
 import { COMP } from '../content/comp';
 import { CLASS_BY_ID } from '../content/classes';
+import {
+  LOOT_SYSTEMS,
+  LOOT_SYSTEM_BY_ID,
+  VAULT,
+  type LootSystemId,
+} from '../content/economy';
 import type { Quality } from '../content/gear';
 import { LEVELING } from '../content/maps';
 import { RAID_BY_ID, RAID_SETTLEMENT } from '../content/raids';
@@ -11,6 +17,7 @@ import type { SimInput } from '../sim/facade';
 import type { SimEvent } from '../sim/events';
 import { squadCompositions, teamCheck, unassignedMembers } from '../sim/comp';
 import { dungeonStatuses, squadDungeon, squadDungeonReadiness } from '../sim/dungeon';
+import { externalActivityStatuses, squadExternalActivity } from '../sim/economy';
 import { levelingMapStatuses, squadLevelingMap, xpToNextLevel } from '../sim/leveling';
 import { raidStatuses } from '../sim/raid';
 import { averageItemLevel, guildAverageItemLevel, guildAverageLevel } from '../sim/roster';
@@ -186,12 +193,37 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
           <h2 class="section-title">下本分配</h2>
         </div>
         <ul class="assign-list dungeon-assign-list" data-ref="dungeon-assign-list"></ul>
+        <div class="leveling-head dungeon-head">
+          <h2 class="section-title">外快(个人金)</h2>
+        </div>
+        <p class="leveling-note">满职能小队出坞打工/跑野团,收入归团员个人金 —— GKP 制下团本出价的底气。制度与钱包见「金库·荣誉」页。</p>
+        <ul class="map-list external-list" data-ref="external-list"></ul>
+        <div class="pool-head assign-head">
+          <h2 class="section-title">外快分配</h2>
+        </div>
+        <ul class="assign-list external-assign-list" data-ref="external-assign-list"></ul>
       </section>
       <section class="pane" data-pane="world" hidden>
         <p class="empty-hint">「世界」页签在后续工单开放。</p>
       </section>
       <section class="pane" data-pane="vault" hidden>
-        <p class="empty-hint">「金库·荣誉」页签在后续工单开放。</p>
+        <div class="vault-balance" data-ref="vault-balance"></div>
+        <div class="loot-system-panel">
+          <div class="pool-head">
+            <h2 class="section-title">分配制度</h2>
+            <span class="pool-sub">公会团装备归属,三选一、可更换有转换成本</span>
+          </div>
+          <ul class="loot-system-list" data-ref="loot-system-list"></ul>
+        </div>
+        <div class="self-deal-panel" data-ref="self-deal-panel" hidden></div>
+        <div class="wallet-panel">
+          <div class="pool-head">
+            <h2 class="section-title">团员钱包</h2>
+            <span class="pool-sub" data-ref="wallet-sub"></span>
+          </div>
+          <ul class="wallet-list" data-ref="wallet-list"></ul>
+        </div>
+        <p class="empty-hint">「荣誉墙」在后续工单开放。</p>
       </section>
     </main>
     <section class="event-panel">
@@ -247,6 +279,13 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
   const dungeonReportEl = requireElement<HTMLDivElement>(root, 'dungeon-report');
   const dungeonListEl = requireElement<HTMLUListElement>(root, 'dungeon-list');
   const dungeonAssignListEl = requireElement<HTMLUListElement>(root, 'dungeon-assign-list');
+  const externalListEl = requireElement<HTMLUListElement>(root, 'external-list');
+  const externalAssignListEl = requireElement<HTMLUListElement>(root, 'external-assign-list');
+  const vaultBalanceEl = requireElement<HTMLDivElement>(root, 'vault-balance');
+  const lootSystemListEl = requireElement<HTMLUListElement>(root, 'loot-system-list');
+  const selfDealPanelEl = requireElement<HTMLDivElement>(root, 'self-deal-panel');
+  const walletSubEl = requireElement<HTMLSpanElement>(root, 'wallet-sub');
+  const walletListEl = requireElement<HTMLUListElement>(root, 'wallet-list');
 
   // 页签切换:纯展示行为(哪个 pane 可见),不是业务规则
   let activeTab: TabId = 'roster';
@@ -472,6 +511,76 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
     }
   });
 
+  // 外快分配操作(日程页):只是把「出坞打工/跑野团/停止」转交给门面裁决
+  // (解锁与满职能校验一律在 sim;此处不禁用、不做规则判断)
+  externalAssignListEl.addEventListener('click', (event) => {
+    const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-action]');
+    if (button === null || button.disabled) {
+      return;
+    }
+    const row = button.closest<HTMLElement>('[data-squad-id]');
+    if (row === null) {
+      return;
+    }
+    const squadId = Number(row.dataset.squadId);
+    if (button.dataset.action === 'stop-external') {
+      const stop = button.dataset.activity === 'carry' ? 'stopCarry' : 'stopWildRaid';
+      options.dispatch({
+        command: { type: stop, squadId } as { type: 'stopCarry' | 'stopWildRaid'; squadId: number },
+        deltaGameMinutes: 0,
+      });
+      return;
+    }
+    if (button.dataset.action === 'assign-external') {
+      const select = row.querySelector<HTMLSelectElement>('select');
+      if (select === null || select.value === '') {
+        return;
+      }
+      const command = {
+        type: (select.value === 'carry' ? 'assignCarry' : 'assignWildRaid') as 'assignCarry' | 'assignWildRaid',
+        squadId,
+      };
+      options.dispatch({ command, deltaGameMinutes: 0 });
+    }
+  });
+
+  // 金库·荣誉页操作(换制/自肥):转交门面裁决 —— 成本校验与忠诚摩擦都在 sim;
+  // 确认弹窗是纯展示行为,「金库不足」的禁用也只是展示(门面仍做最终裁决)
+  lootSystemListEl.addEventListener('click', (event) => {
+    const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-action="switch-loot-system"]');
+    if (button === null || button.disabled) {
+      return;
+    }
+    const def = LOOT_SYSTEM_BY_ID.get(button.dataset.system as LootSystemId);
+    if (def === undefined) {
+      return;
+    }
+    const cost =
+      def.switchCostGold > 0 ? `立规支出 ${def.switchCostGold} 金(金库)、` : '';
+    const extra = def.id === 'dkp' ? ',且全员 DKP 清零重记' : '';
+    if (!window.confirm(`换用「${def.name}」?${cost}全员忠诚 −${def.switchLoyaltyHit}${extra}。`)) {
+      return;
+    }
+    options.dispatch({ command: { type: 'setLootSystem', system: def.id }, deltaGameMinutes: 0 });
+  });
+  selfDealPanelEl.addEventListener('click', (event) => {
+    const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-action="toggle-self-deal"]');
+    if (button === null || button.disabled) {
+      return;
+    }
+    const enabled = button.dataset.enabled === 'true';
+    const def = LOOT_SYSTEM_BY_ID.get('chairman')!;
+    if (
+      enabled &&
+      !window.confirm(
+        `开启自肥?团本掉落将优先装进会长角色 —— 每件自肥,出席团员忠诚 −${def.selfDealLoyaltyCost}、声望 −${def.selfDealReputationCost},代价逐件累积。`,
+      )
+    ) {
+      return;
+    }
+    options.dispatch({ command: { type: 'setSelfDealing', enabled }, deltaGameMinutes: 0 });
+  });
+
   // 开团操作(编成页):转交门面裁决 —— 内容门槛/团队检查的最终裁决都在 sim,
   // 此处只做展示性禁用与提示
   raidOpenEl.addEventListener('click', (event) => {
@@ -520,6 +629,7 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
     renderRoster();
     renderSquads(state);
     renderSchedule(state);
+    renderVault(state);
 
     if (newEvents.length > 0) {
       // 逐条入缓冲:超长离线补结算的一次性事件可达数万条,展开传参会爆调用栈
@@ -707,12 +817,13 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
     }
     card.append(head);
 
-    // 活动行:当前进驻的地图/副本(或休整);数值只读自内容表,安排在「日程」页
+    // 活动行:当前进驻的地图/副本/外快(或休整);数值只读自内容表,安排在「日程」页
     const activeMap = squadLevelingMap(composition.squad);
     const activeDungeon = squadDungeon(composition.squad);
+    const activeExternal = squadExternalActivity(composition.squad);
     const activity = el(
       'div',
-      `squad-activity${activeMap || activeDungeon ? ' squad-activity-on' : ''}`,
+      `squad-activity${activeMap || activeDungeon || activeExternal ? ' squad-activity-on' : ''}`,
     );
     if (activeMap !== undefined) {
       activity.append(el('span', 'squad-activity-text', `练级中:${activeMap.name}(${activeMap.tier}区)`));
@@ -723,6 +834,11 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
       activity.append(el('span', 'squad-activity-text', `下本中:${activeDungeon.name}(${activeDungeon.tier}档)`));
       activity.append(
         el('span', 'squad-activity-sub', `每日 ${activeDungeon.runsPerDay} 次 · 难度 ${activeDungeon.difficultyTarget} · 掉落装等 ${activeDungeon.dropItemLevel} 档`),
+      );
+    } else if (activeExternal !== undefined) {
+      activity.append(el('span', 'squad-activity-text', `外快中:${activeExternal.name}`));
+      activity.append(
+        el('span', 'squad-activity-sub', `每人每日 +${activeExternal.goldPerMemberPerDay} 金(个人金) · 疲劳 +${activeExternal.fatiguePerMemberPerDay}/日`),
       );
     } else {
       activity.append(el('span', 'squad-activity-text squad-activity-idle', '待命休整 · 疲劳自然恢复'));
@@ -917,16 +1033,15 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
     );
 
     // 下本分配行:选择已解锁副本进驻,或停止下本回城休整
-    // (满职能与否只是展示性提示,裁决在门面)
+    // (满职能与否只是展示性提示,裁决在门面;无小队只给提示,不提前返回 —— 后面还有外快区)
+    const unlockedDungeons = dungeonStates.filter((status) => status.unlocked);
     if (state.squads.length === 0) {
       dungeonAssignListEl.replaceChildren(
         el('li', 'empty-hint', '还没有小队 —— 满职能小队(5 人 + 1 坦 1 奶)才能下本,先去「编成」页建队。'),
       );
-      return;
-    }
-    const unlockedDungeons = dungeonStates.filter((status) => status.unlocked);
-    dungeonAssignListEl.replaceChildren(
-      ...state.squads.map((squad, index) => {
+    } else {
+      dungeonAssignListEl.replaceChildren(
+        ...state.squads.map((squad, index) => {
         const current = squadDungeon(squad);
         const readiness = squadDungeonReadiness(squad, state.members);
         const row = el('li', 'assign-row');
@@ -972,6 +1087,98 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
         }
         return row;
       }),
+      );
+    }
+
+    // 外快一览(打工/野团):门槛与收益标示,未解锁给出未达标项(判定在 sim,此处只渲染)
+    const externalStates = externalActivityStatuses(state.members);
+    externalListEl.replaceChildren(
+      ...externalStates.map(({ def, unlocked, unmet }) => {
+        const card = el('li', `map-card external-card${unlocked ? '' : ' map-locked'}`);
+        const head = el('div', 'map-head');
+        head.append(el('span', 'map-name', def.name));
+        head.append(el('span', 'map-tier map-tier-external', '外快'));
+        head.append(
+          el('span', 'map-band', `门槛 Lv≥${def.unlock.averageLevel} · 装等≥${def.unlock.averageItemLevel}`),
+        );
+        card.append(head);
+        card.append(el('p', 'map-desc', def.description));
+        card.append(
+          el(
+            'div',
+            'map-stats',
+            `每人每日 +${def.goldPerMemberPerDay} 金(入个人金) · 疲劳 +${def.fatiguePerMemberPerDay}/日`,
+          ),
+        );
+        if (!unlocked) {
+          card.append(
+            el(
+              'div',
+              'map-lock',
+              `未解锁 —— 需${unmet.join('、')}(当前 等级 ${averageLevel} · 装等 ${averageItemLevel})`,
+            ),
+          );
+        }
+        return card;
+      }),
+    );
+
+    // 外快分配行:选择已解锁活动出坞,或停止回城休整(满职能校验在门面)
+    const unlockedExternal = externalStates.filter((status) => status.unlocked);
+    if (state.squads.length === 0) {
+      externalAssignListEl.replaceChildren(
+        el('li', 'empty-hint', '还没有小队 —— 外快以小队为单位出坞,先去「编成」页建队。'),
+      );
+      return;
+    }
+    externalAssignListEl.replaceChildren(
+      ...state.squads.map((squad, index) => {
+        const current = squadExternalActivity(squad);
+        const readiness = squadDungeonReadiness(squad, state.members);
+        const row = el('li', 'assign-row');
+        row.dataset.squadId = String(squad.id);
+
+        const info = el('div', 'assign-info');
+        info.append(el('span', 'assign-name', `第 ${index + 1} 小队(${squad.memberIds.length}/${COMP.squadSize})`));
+        if (current !== undefined) {
+          info.append(
+            el('span', 'assign-status assign-status-active', `外快中:${current.name}(每人每日 +${current.goldPerMemberPerDay} 金)`),
+          );
+        } else if (!readiness.ready) {
+          info.append(el('span', 'assign-status assign-status-blocked', `编成不齐:${readiness.reasons.join('、')}`));
+        } else {
+          info.append(el('span', 'assign-status', '休整中 · 可随时出坞'));
+        }
+        row.append(info);
+
+        if (unlockedExternal.length > 0) {
+          const select = el('select', 'assign-select') as HTMLSelectElement;
+          for (const { def } of unlockedExternal) {
+            const option = el('option', undefined, `${def.name}(+${def.goldPerMemberPerDay} 金/人·日)`) as HTMLOptionElement;
+            option.value = def.id;
+            if (current?.id === def.id) {
+              option.selected = true;
+            }
+            select.append(option);
+          }
+          const go = el('button', 'pool-btn pool-btn-recruit', '出坞外快');
+          go.type = 'button';
+          go.dataset.action = 'assign-external';
+          if (!readiness.ready) {
+            go.disabled = true; // 展示性禁用:真实裁决仍在门面
+            go.title = `编成不齐:${readiness.reasons.join('、')}`;
+          }
+          row.append(select, go);
+        }
+        if (current !== undefined) {
+          const stop = el('button', 'pool-btn pool-btn-reject', '停止外快');
+          stop.type = 'button';
+          stop.dataset.action = 'stop-external';
+          stop.dataset.activity = current.id;
+          row.append(stop);
+        }
+        return row;
+      }),
     );
   }
 
@@ -984,8 +1191,16 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
     const wrap = el('div', 'raid-open-card');
     const head = el('div', 'pool-head');
     head.append(el('h2', 'section-title', '团本'));
-    // 最小金库的可见面:余额 + 历史修理支出(完整经济在 T11)
-    head.append(el('span', 'pool-sub', `金库 ${state.vault.gold} 金 · 历史修理支出 ${state.vault.repairSpent} 金`));
+    // 经济可见面:金库余额 + 现行分配制度(制度详情与换制在「金库·荣誉」页)
+    head.append(
+      el(
+        'span',
+        'pool-sub',
+        `金库 ${state.vault.gold} 金 · 制度:${LOOT_SYSTEM_BY_ID.get(state.economy.system)?.name ?? '?'}${
+          state.economy.selfDealing ? '(自肥中)' : ''
+        }`,
+      ),
+    );
     wrap.append(head);
 
     if (plan !== undefined) {
@@ -1481,9 +1696,9 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
         const info = el('div', 'queue-info');
         info.append(el('span', 'queue-squad', `第 ${entry.squadOrdinal} 小队`));
         const title = el('span', 'queue-name');
-        title.append(
-          el('span', `queue-kind queue-kind-${entry.kind === '练级' ? 'leveling' : 'dungeon'}`, entry.kind),
-        );
+        const kindClass =
+          entry.kind === '练级' ? 'leveling' : entry.kind === '下本' ? 'dungeon' : 'external';
+        title.append(el('span', `queue-kind queue-kind-${kindClass}`, entry.kind));
         title.append(document.createTextNode(entry.name));
         info.append(title);
         row.append(info);
@@ -1493,7 +1708,9 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
             'queue-cadence',
             entry.kind === '练级'
               ? `${entry.tier}区 · 经验 ${entry.perDay}/日`
-              : `${entry.tier}档 · 每日 ${entry.perDay} 次`,
+              : entry.kind === '下本'
+                ? `${entry.tier}档 · 每日 ${entry.perDay} 次`
+                : `${entry.perDay} 金/人·日(个人金)`,
           ),
         );
         return row;
@@ -1597,8 +1814,154 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
     dungeonReportEl.replaceChildren(card);
   }
 
-  /** 待命团员行:选择目标小队并编入(满员禁用是展示行为,裁决在门面)。 */
-  function renderBenchRow(member: Member, squads: readonly { id: number; memberIds: readonly number[] }[]): HTMLLIElement {
+  /** 金库·荣誉页渲染(T11):金库余额 + 分配制度(三选一可换)+ 自肥面板 + 团员钱包。 */
+  function renderVault(state: GameState): void {
+    // 金库卡:双钱包的公家一侧(数值只读自状态)
+    const balance = el('div', 'vault-card');
+    const balanceHead = el('div', 'pool-head');
+    balanceHead.append(el('h2', 'section-title', '公会金库'));
+    balanceHead.append(el('span', 'pool-sub', '建会起始 ' + VAULT.startingGold + ' 金'));
+    balance.append(balanceHead);
+    balance.append(el('p', 'vault-gold-line', `余额 ${state.vault.gold} 金`));
+    balance.append(
+      el(
+        'p',
+        'vault-sub-line',
+        `历史收入 ${state.vault.incomeTotal} 金 · 历史修理支出 ${state.vault.repairSpent} 金`,
+      ),
+    );
+    const lastLoot = state.lastRaidNight?.loot;
+    if (lastLoot !== undefined) {
+      const systemName = LOOT_SYSTEM_BY_ID.get(lastLoot.system)?.name ?? '?';
+      balance.append(
+        el(
+          'p',
+          'vault-sub-line',
+          `最近团本夜(${systemName}):入金库 ${lastLoot.vaultGoldIn} 金 · 自肥 ${lastLoot.selfDealtCount} 件`,
+        ),
+      );
+    }
+    vaultBalanceEl.replaceChildren(balance);
+
+    // 分配制度三卡:名称/风格/详解/效果摘要/换入成本(数值只读自内容表)
+    const signed = (value: number): string => (value >= 0 ? `+${value}` : `${value}`);
+    lootSystemListEl.replaceChildren(
+      ...LOOT_SYSTEMS.map((def) => {
+        const current = def.id === state.economy.system;
+        const card = el('li', `loot-system-card${current ? ' loot-system-current' : ''}`);
+        const head = el('div', 'loot-system-head');
+        head.append(el('span', 'loot-system-name', def.name));
+        head.append(el('span', 'loot-system-tag', def.tagline));
+        card.append(head);
+        card.append(el('p', 'loot-system-desc', def.description));
+        const effects = el('div', 'loot-system-effects');
+        effects.append(el('span', 'effect-chip', `每夜出席者忠诚 ${signed(def.attendeeLoyaltyPerNight)}`));
+        effects.append(el('span', 'effect-chip', `每夜出席者心情 ${signed(def.attendeeMoodPerNight)}`));
+        effects.append(
+          el(
+            'span',
+            'effect-chip',
+            def.id === 'gkp'
+              ? `成交价 ${def.gkpVaultCutPercent}% 入金库、其余全团均分`
+              : '金币不流动',
+          ),
+        );
+        if (def.selfDealLoyaltyCost !== undefined) {
+          effects.append(
+            el(
+              'span',
+              'effect-chip effect-chip-warn',
+              `自肥每件:忠诚 −${def.selfDealLoyaltyCost} · 声望 −${def.selfDealReputationCost}`,
+            ),
+          );
+        }
+        card.append(effects);
+        const actions = el('div', 'pool-actions loot-system-actions');
+        actions.append(
+          el(
+            'span',
+            'loot-switch-cost',
+            `换入成本:${def.switchCostGold > 0 ? `金库 ${def.switchCostGold} 金 + ` : ''}全员忠诚 −${def.switchLoyaltyHit}${
+              def.id === 'dkp' ? ' · DKP 清零重记' : ''
+            }`,
+          ),
+        );
+        if (current) {
+          actions.append(el('span', 'loot-current-badge', '现行制度'));
+        } else {
+          const button = el('button', 'pool-btn pool-btn-recruit', '换用此制度');
+          button.type = 'button';
+          button.dataset.action = 'switch-loot-system';
+          button.dataset.system = def.id;
+          if (state.vault.gold < def.switchCostGold) {
+            button.disabled = true; // 展示性禁用:真实裁决仍在门面
+            button.title = `金库余额不足(立规需 ${def.switchCostGold} 金)`;
+          }
+          actions.append(button);
+        }
+        card.append(actions);
+        return card;
+      }),
+    );
+
+    // 自肥面板:仅会长裁量制下存在(开启/停止 + 累积代价)
+    const chairmanDef = LOOT_SYSTEM_BY_ID.get('chairman')!;
+    if (state.economy.system === 'chairman') {
+      const card = el('div', `self-deal-card${state.economy.selfDealing ? ' self-deal-on' : ''}`);
+      const head = el('div', 'pool-head');
+      head.append(el('h2', 'section-title', '自肥'));
+      head.append(
+        el('span', 'pool-sub', state.economy.selfDealing ? '已开启 —— 掉落优先装进会长角色' : '未开启'),
+      );
+      card.append(head);
+      card.append(
+        el(
+          'p',
+          'self-deal-desc',
+          `会长利用分配权把装备分给自己的会长角色:每件自肥,出席团员忠诚 −${chairmanDef.selfDealLoyaltyCost}、声望 −${chairmanDef.selfDealReputationCost}(声望现为桩值),代价逐件累积。`,
+        ),
+      );
+      card.append(
+        el(
+          'p',
+          'self-deal-accum',
+          `已累积:自肥 ${state.economy.selfDealtCount} 件 · 声望代价累计 ${state.economy.selfDealReputationPaid}`,
+        ),
+      );
+      const button = el(
+        'button',
+        `pool-btn ${state.economy.selfDealing ? 'pool-btn-reject' : 'pool-btn-recruit'}`,
+        state.economy.selfDealing ? '停止自肥' : '开启自肥',
+      );
+      button.type = 'button';
+      button.dataset.action = 'toggle-self-deal';
+      button.dataset.enabled = state.economy.selfDealing ? 'false' : 'true';
+      card.append(button);
+      selfDealPanelEl.replaceChildren(card);
+      selfDealPanelEl.hidden = false;
+    } else {
+      selfDealPanelEl.hidden = true;
+      selfDealPanelEl.replaceChildren();
+    }
+
+    // 团员钱包:个人金(打工/野团所得)与 DKP 余额
+    walletSubEl.textContent = '打工/野团收入归个人金;GKP 制下用来出价';
+    walletListEl.replaceChildren(
+      ...state.members.map((member) => {
+        const row = el('li', 'wallet-row');
+        const name = el('span', 'member-name', member.name);
+        if (member.isChairman) {
+          name.append(el('span', 'chairman-badge', '会长'));
+        }
+        row.append(name);
+        row.append(el('span', 'wallet-gold', `${member.personalGold} 金`));
+        row.append(el('span', 'wallet-dkp', `DKP ${member.dkp}`));
+        return row;
+      }),
+    );
+  }
+
+  /** 待命团员行:选择目标小队并编入(满员禁用是展示行为,裁决在门面)。 */  function renderBenchRow(member: Member, squads: readonly { id: number; memberIds: readonly number[] }[]): HTMLLIElement {
     const cls = CLASS_BY_ID.get(member.classId);
     const spec = cls?.specs.find((s) => s.id === member.specId);
 
@@ -1679,7 +2042,7 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
           el(
             'span',
             'row-vitals',
-            `心情${member.mood} 忠诚${member.loyalty} 疲劳${member.fatigue}`,
+            `心情${member.mood} 忠诚${member.loyalty} 疲劳${member.fatigue} 金${member.personalGold}`,
           ),
         );
 
@@ -1733,6 +2096,8 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
     stats.append(
       el('div', 'stat', `等级 ${member.level}`),
       el('div', 'stat stat-accent', `装等 ${averageItemLevel(member)}`),
+      el('div', 'stat', `个人金 ${member.personalGold}`),
+      el('div', 'stat', `DKP ${member.dkp}`),
     );
     frag.append(stats);
 

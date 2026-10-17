@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { AURA_BY_CLASS, COMP } from '../content/comp';
 import { DUNGEON_SETTLEMENT } from '../content/dungeons';
-import { VAULT } from '../content/economy';
+import { LOOT_SYSTEM_BY_ID, VAULT } from '../content/economy';
 import { GEAR_SLOTS } from '../content/gear';
 import { RAID_BY_ID, RAID_SETTLEMENT, RAIDS, type RaidDef } from '../content/raids';
 import { GAME_MINUTES_PER_DAY, GAME_MINUTES_PER_WEEK } from './clock';
@@ -38,6 +38,8 @@ function synthMember(
     gear: GEAR_SLOTS.map((slot) => ({ slot, quality: '蓝' as const, itemLevel })) as GearItem[],
     mood: options?.mood ?? 80,
     loyalty: 80,
+    personalGold: 0,
+    dkp: 0,
     fatigue: options?.fatigue ?? 0,
     attendance: { styleId: 'iron', baseRate: 95 },
     traits: [],
@@ -94,7 +96,7 @@ function raidTeamState(
     squads,
     nextSquadId: 9,
     clockGameMinutes: GAME_MINUTES_PER_WEEK - 60, // 团本夜(周边界)前 60 分钟
-    vault: { gold: options?.vaultGold ?? VAULT.startingGold, repairSpent: 0 },
+    vault: { gold: options?.vaultGold ?? VAULT.startingGold, repairSpent: 0, incomeTotal: 0 },
     raidPlan:
       options?.plan === false
         ? undefined
@@ -253,7 +255,9 @@ describe('团本夜:整夜结算的确定性与首领顺序(验收标准 1 与 6
     expect(killLines.map((text) => RAID.bosses.findIndex((b) => text.includes(`「${b.name}」`)))).toEqual(
       RAID.bosses.map((_, index) => index),
     );
-    expect(texts.at(-1)).toContain('全通');
+    expect(texts.filter((text) => text.includes('全通'))).toHaveLength(1);
+    // 收夜尾巴(T11):全通后的本夜分配小结是最后一条团本事件
+    expect(texts.at(-1)).toContain('本夜分配:「会长裁量」');
     // 周更事件在全部团本事件之后(同一边界:夜结束 → 新一周 CD 重置)
     const kinds = output.events.filter((e) => e.kind === '团本' || e.kind === '周更').map((e) => e.kind);
     expect(kinds.indexOf('周更')).toBe(kinds.length - 1);
@@ -271,7 +275,7 @@ describe('团本夜:整夜结算的确定性与首领顺序(验收标准 1 与 6
     expect(report.lineup.filter((m) => m.role === '治疗')).toHaveLength(8);
     expect(report.teamItemLevel).toBe(80);
     expect(report.bosses.map((b) => b.killed)).toEqual(RAID.bosses.map(() => true));
-    expect(state.vault).toEqual({ gold: VAULT.startingGold, repairSpent: 0 }); // 全通无修理支出
+    expect(state.vault).toEqual({ gold: VAULT.startingGold, repairSpent: 0, incomeTotal: 0 }); // 全通无修理支出;默认裁量制金币不流动
     // 全员:每次首领战积劳 8 × 5 次;士气 +clearMoodBoost;会长角色不受影响
     const raiders = state.members.filter((m) => m.id <= 40);
     for (const member of raiders) {
@@ -379,7 +383,7 @@ describe('团灭代价与最小金库(验收标准 4 与 5)', () => {
 
     // 最小金库:余额扣修理金,修理支出累计
     const repair = RAID_SETTLEMENT.wipeRepairGoldPerRaider * 40;
-    expect(state.vault).toEqual({ gold: VAULT.startingGold - repair, repairSpent: repair });
+    expect(state.vault).toEqual({ gold: VAULT.startingGold - repair, repairSpent: repair, incomeTotal: 0 });
     expect(state.lastRaidNight!.repairGold).toBe(repair);
 
     // 疲劳 = 每次首领战 × 尝试次数 + 团灭额外;士气 = 打击值(会长角色不受影响)
@@ -394,14 +398,19 @@ describe('团灭代价与最小金库(验收标准 4 与 5)', () => {
     expect(chairman.mood).toBe(80);
   });
 
-  it('无永久损失:名册不动、忠诚不动、装备只增不减', () => {
+  it('无永久损失:名册不动、忠诚只按制度微调、装备只增不减', () => {
     const before = raidTeamState(67);
     const facade = new SimulationFacade(SEED, undefined, structuredClone(before));
     facade.dispatch({ deltaGameMinutes: 60 });
     const after = facade.state;
 
+    // 默认制度 = 会长裁量(T11):出席者忠诚每夜 −2(内容表),会长角色不波动
+    const discretionDelta = LOOT_SYSTEM_BY_ID.get('chairman')!.attendeeLoyaltyPerNight;
+    expect(after.members.map((m) => m.loyalty)).toEqual(
+      before.members.map((m) => (m.isChairman ? m.loyalty : m.loyalty + discretionDelta)),
+    );
     expect(after.members.map((m) => m.id)).toEqual(before.members.map((m) => m.id)); // 无人退会
-    expect(after.members.map((m) => m.loyalty)).toEqual(before.members.map((m) => m.loyalty));
+    expect(after.members.map((m) => m.personalGold)).toEqual(before.members.map(() => 0)); // 裁量制金币不流动
     expect(after.members.map((m) => m.level)).toEqual(before.members.map((m) => m.level));
     expect(after.members.map((m) => m.experience)).toEqual(before.members.map((m) => m.experience));
     for (const member of after.members) {
@@ -415,14 +424,14 @@ describe('团灭代价与最小金库(验收标准 4 与 5)', () => {
   it('金库余额不足:修理金按余额封顶实付(不清零为负)', () => {
     const facade = new SimulationFacade(SEED, undefined, raidTeamState(67, { vaultGold: 50 }));
     facade.dispatch({ deltaGameMinutes: 60 });
-    expect(facade.state.vault).toEqual({ gold: 0, repairSpent: 50 });
+    expect(facade.state.vault).toEqual({ gold: 0, repairSpent: 50, incomeTotal: 0 });
     expect(facade.state.lastRaidNight!.wipe!.repairGold).toBe(50); // 报告记实付
   });
 
   it('金库见底:团灭照样发生,实付 0(代价面保留疲劳与士气)', () => {
     const facade = new SimulationFacade(SEED, undefined, raidTeamState(67, { vaultGold: 0 }));
     facade.dispatch({ deltaGameMinutes: 60 });
-    expect(facade.state.vault).toEqual({ gold: 0, repairSpent: 0 });
+    expect(facade.state.vault).toEqual({ gold: 0, repairSpent: 0, incomeTotal: 0 });
     expect(facade.state.lastRaidNight!.cleared).toBe(false);
     expect(facade.state.members[0]!.mood).toBe(80 - RAID_SETTLEMENT.wipeMoodHit);
   });
@@ -464,7 +473,7 @@ describe('团本 CD 与夜取消(验收标准 1 与 6)', () => {
       `团本夜取消:团队检查未通过(满员小队不足:7/${COMP.teamCheck.requiredFullSquads} 支),补齐编成后下周再战。`,
     ]);
     expect(facade.state.lastRaidNight).toBeUndefined(); // 未开打,无报告
-    expect(facade.state.vault).toEqual({ gold: VAULT.startingGold, repairSpent: 0 }); // 不付代价
+    expect(facade.state.vault).toEqual({ gold: VAULT.startingGold, repairSpent: 0, incomeTotal: 0 }); // 不付代价
     expect(facade.state.members.every((m) => m.mood === 80 && m.fatigue === 0)).toBe(true);
     expect(facade.state.raidPlan).toBeUndefined(); // 安排随夜清空
   });
@@ -486,7 +495,7 @@ describe('存档兼容:最小金库随 v6 落盘(验收标准 5 的持久面)', 
     const state = raidTeamState(80);
     const restored = decodeSave(encodeSave(state))!;
     expect(restored).toEqual(state);
-    expect(restored.vault).toEqual({ gold: VAULT.startingGold, repairSpent: 0 });
+    expect(restored.vault).toEqual({ gold: VAULT.startingGold, repairSpent: 0, incomeTotal: 0 });
     const facade = new SimulationFacade(0, undefined, restored);
     facade.dispatch({ deltaGameMinutes: 60 });
     expect(facade.state.lastRaidNight!.cleared).toBe(true);
@@ -500,7 +509,7 @@ describe('存档兼容:最小金库随 v6 落盘(验收标准 5 的持久面)', 
     );
     const v5File = JSON.stringify({ version: 5, state: legacyState });
     const migrated = decodeSave(v5File)!;
-    expect(migrated.vault).toEqual({ gold: VAULT.startingGold, repairSpent: 0 });
+    expect(migrated.vault).toEqual({ gold: VAULT.startingGold, repairSpent: 0, incomeTotal: 0 });
     const facade = new SimulationFacade(0, undefined, migrated);
     facade.dispatch({ deltaGameMinutes: GAME_MINUTES_PER_DAY }); // 推进一日不抛错
     expect(facade.state.clockGameMinutes).toBe(state.clockGameMinutes + GAME_MINUTES_PER_DAY);

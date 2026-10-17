@@ -8,6 +8,7 @@
 
 import { GAME_MINUTES_PER_DAY, GAME_MINUTES_PER_WEEK } from './clock';
 import { squadDungeon } from './dungeon';
+import { externalActivityKindLabel, squadExternalActivity } from './economy';
 import { squadLevelingMap } from './leveling';
 import type { GameState } from './state';
 
@@ -16,13 +17,13 @@ export interface ActivityEntry {
   readonly squadId: number;
   /** 第几小队(1 起,按编成顺序) */
   readonly squadOrdinal: number;
-  /** '练级' = 进驻练级地图;'下本' = 进驻 5 人本 */
-  readonly kind: '练级' | '下本';
-  /** 内容名(地图名/副本名) */
+  /** '练级' = 进驻练级地图;'下本' = 进驻 5 人本;'打工'/'野团' = 外快(收入归个人金) */
+  kind: '练级' | '下本' | '打工' | '野团';
+  /** 内容名(地图名/副本名/外快名) */
   readonly name: string;
-  /** 高效/休闲(练级)或 普通/高级/困难/英雄(下本) */
+  /** 高效/休闲(练级)、普通/高级/困难/英雄(下本)或 外快 */
   readonly tier: string;
-  /** 每游戏日的结算量:练级 = 每日经验收益;下本 = 每日次数 */
+  /** 每游戏日的结算量:练级 = 每日经验;下本 = 每日次数;外快 = 每人每日个人金收入 */
   readonly perDay: number;
 }
 
@@ -54,6 +55,18 @@ export function activityQueue(state: GameState): readonly ActivityEntry[] {
         name: dungeon.name,
         tier: dungeon.tier,
         perDay: dungeon.runsPerDay,
+      });
+      return;
+    }
+    const external = squadExternalActivity(squad);
+    if (external !== undefined) {
+      entries.push({
+        squadId: squad.id,
+        squadOrdinal: index + 1,
+        kind: externalActivityKindLabel(external.id),
+        name: external.name,
+        tier: '外快',
+        perDay: external.goldPerMemberPerDay,
       });
     }
   });
