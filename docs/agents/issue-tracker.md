@@ -1,6 +1,6 @@
 # Issue tracker: GitHub
 
-Issues and specs for this repo live in GitHub issues ([sumo91/WowIdle](https://github.com/sumo91/WowIdle/issues)). Use the `gh` CLI for all operations.
+Issues and specs for this repo live in GitHub issues ([sumo91/RaidNight](https://github.com/sumo91/RaidNight/issues)). Use the `gh` CLI for all operations.
 
 ## Conventions
 

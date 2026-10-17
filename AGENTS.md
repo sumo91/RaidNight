@@ -6,7 +6,7 @@
 
 ### Issue tracker
 
-Issues are tracked in GitHub Issues (sumo91/WowIdle) via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+Issues are tracked in GitHub Issues (sumo91/RaidNight) via the `gh` CLI. See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
