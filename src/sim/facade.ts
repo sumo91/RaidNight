@@ -14,7 +14,15 @@ import { pickOne } from './rng';
 import { createInitialState, normalizeGuildName, type GameState, type Member, type Squad } from './state';
 
 // 存档 API 经门面接缝对外暴露(ADR-0003:版本化 + 迁移;纯函数见 sim/save.ts)
-export { decodeSave, encodeSave, SAVE_KIND, SAVE_VERSION, type SaveFile } from './save';
+export {
+  decodeSave,
+  decodeSaveEnvelope,
+  encodeSave,
+  SAVE_KIND,
+  SAVE_VERSION,
+  type DecodedSave,
+  type SaveFile,
+} from './save';
 
 /**
  * 模拟门面 —— 全项目唯一测试接缝。

@@ -5,27 +5,46 @@ import type { Quality } from '../content/gear';
 import { LEVELING } from '../content/maps';
 import { SKILL_TIER_BY_ID } from '../content/skill-tiers';
 import { TRAIT_BY_ID } from '../content/traits';
-import { GAME_MINUTES_PER_DAY, GAME_MINUTES_PER_WEEK } from '../sim/clock';
+import { GAME_MINUTES_PER_DAY, GAME_MINUTES_PER_WEEK, gameMinutesToRealMs } from '../sim/clock';
 import type { SimInput } from '../sim/facade';
 import type { SimEvent } from '../sim/events';
 import { squadCompositions, teamCheck, unassignedMembers } from '../sim/comp';
 import { dungeonStatuses, squadDungeon, squadDungeonReadiness } from '../sim/dungeon';
 import { levelingMapStatuses, squadLevelingMap, xpToNextLevel } from '../sim/leveling';
 import { averageItemLevel, guildAverageItemLevel, guildAverageLevel } from '../sim/roster';
+import { activityQueue, nextSettlement } from '../sim/schedule';
 import type { DungeonRunReport, GameState, Member } from '../sim/state';
-import { formatGameClock, formatGameStamp } from './format';
+import { formatGameClock, formatGameDuration, formatGameStamp, formatRealDuration } from './format';
 
 /**
  * 薄渲染层:只读状态、派发输入,不含任何业务规则。
  * 一切规则(校验、结算、时间推进、派生数值)都在 sim 门面内;
  * 这里只做「状态 → DOM」的映射与纯展示行为(页签/选中)。
+ * 倒计时的「现实还需多久」用 sim/clock 的换算函数(常量同源),仅作展示。
  */
+
+/** 离线归来摘要:装配层由离线补结算的事件流统计而来,UI 只渲染不统计。 */
+export interface OfflineHarvestView {
+  /** 离线了多久(现实时长文案,如「2.1天」) */
+  readonly awayText: string;
+  /** 离线期间推进的游戏时长文案(如「2游戏周」) */
+  readonly advancedText: string;
+  /** 离线起止的游戏历时间戳(如「第2周周五 03:17 → 第4周周五 03:17」)的两端 */
+  readonly fromStamp: string;
+  readonly toStamp: string;
+  /** 期间补记的事件总数 */
+  readonly eventCount: number;
+  /** 关键结果统计文案(速通次数/掉落穿戴数等,装配层拼好) */
+  readonly highlights: readonly string[];
+}
 
 export interface AppHandle {
   /** 用新状态重渲染;newEvents 追加进滚动日志缓冲。 */
   render(state: GameState, newEvents: readonly SimEvent[]): void;
   /** 清空滚动日志缓冲(导入存档恢复另一进度时调用;事件日志不在存档内)。 */
   clearFeed(): void;
+  /** 展示离线归来摘要卡(传 null 收起);数据由装配层统计。 */
+  showOfflineHarvest(view: OfflineHarvestView | null): void;
 }
 
 export interface MountOptions {
@@ -37,6 +56,8 @@ export interface MountOptions {
   exportSave?: () => void;
   /** 导入存档文本,返回是否恢复成功(解码/迁移规则一律在 sim,UI 不做校验)。 */
   importSave?: (text: string) => boolean;
+  /** 模拟离线(调试条):把一段现实时长交给装配层做离线补结算。 */
+  simulateOffline?: (realMs: number) => void;
 }
 
 /** 五页签(DESIGN.md:名册/编成/日程/世界/金库·荣誉);名册是首页(ADR-0006 组建之乐)。 */
@@ -107,6 +128,22 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
         </div>
       </section>
       <section class="pane" data-pane="schedule" hidden>
+        <div class="offline-harvest" data-ref="offline-harvest" hidden></div>
+        <div class="settlement-panel">
+          <div class="settlement-head">
+            <h2 class="section-title">下一场结算</h2>
+            <span class="settlement-tag" data-ref="settlement-tag"></span>
+          </div>
+          <div class="settlement-countdown" data-ref="settlement-countdown"></div>
+          <div class="settlement-dual" data-ref="settlement-dual"></div>
+        </div>
+        <div class="queue-panel">
+          <div class="pool-head">
+            <h2 class="section-title">活动队列</h2>
+            <span class="pool-sub" data-ref="queue-sub"></span>
+          </div>
+          <ul class="queue-list" data-ref="queue-list"></ul>
+        </div>
         <div class="report-panel" data-ref="dungeon-report-wrap" hidden>
           <div class="pool-head">
             <h2 class="section-title">最近下本</h2>
@@ -151,6 +188,7 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
       <span class="dev-label">调试</span>
       <button type="button" data-dev="day">+1 游戏日</button>
       <button type="button" data-dev="week">+1 游戏周</button>
+      <button type="button" data-dev="offline">模拟离线</button>
       <button type="button" data-dev="rename">公会改名</button>
       <button type="button" data-dev="wipe">清档重开</button>
     </div>
@@ -178,6 +216,12 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
   const levelingAvgEl = requireElement<HTMLSpanElement>(root, 'leveling-avg');
   const mapListEl = requireElement<HTMLUListElement>(root, 'map-list');
   const assignListEl = requireElement<HTMLUListElement>(root, 'assign-list');
+  const offlineHarvestEl = requireElement<HTMLDivElement>(root, 'offline-harvest');
+  const settlementTagEl = requireElement<HTMLSpanElement>(root, 'settlement-tag');
+  const settlementCountdownEl = requireElement<HTMLDivElement>(root, 'settlement-countdown');
+  const settlementDualEl = requireElement<HTMLDivElement>(root, 'settlement-dual');
+  const queueSubEl = requireElement<HTMLSpanElement>(root, 'queue-sub');
+  const queueListEl = requireElement<HTMLUListElement>(root, 'queue-list');
   const dungeonReportWrapEl = requireElement<HTMLDivElement>(root, 'dungeon-report-wrap');
   const dungeonReportEl = requireElement<HTMLDivElement>(root, 'dungeon-report');
   const dungeonListEl = requireElement<HTMLUListElement>(root, 'dungeon-list');
@@ -202,6 +246,20 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
   devDay?.addEventListener('click', () => options.dispatch({ deltaGameMinutes: GAME_MINUTES_PER_DAY }));
   const devWeek = root.querySelector<HTMLButtonElement>('[data-dev="week"]');
   devWeek?.addEventListener('click', () => options.dispatch({ deltaGameMinutes: GAME_MINUTES_PER_WEEK }));
+  // 模拟离线(调试):输入现实小时数,交装配层走真实离线补结算路径(输入采集是纯 UI 行为)
+  const devOffline = root.querySelector<HTMLButtonElement>('[data-dev="offline"]');
+  devOffline?.addEventListener('click', () => {
+    const answer = window.prompt('模拟离线多久?(现实小时数,如 12、72):');
+    if (answer === null) {
+      return;
+    }
+    const hours = Number(answer);
+    if (!Number.isFinite(hours) || hours <= 0) {
+      showSaveToast('模拟离线需要一个正的小时数。', false);
+      return;
+    }
+    options.simulateOffline?.(hours * 3_600_000);
+  });
   const devRename = root.querySelector<HTMLButtonElement>('[data-dev="rename"]');
   devRename?.addEventListener('click', () => {
     const name = window.prompt('新的公会名(规则由模拟门面裁决):');
@@ -429,7 +487,10 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
     renderSchedule(state);
 
     if (newEvents.length > 0) {
-      feed.push(...newEvents);
+      // 逐条入缓冲:超长离线补结算的一次性事件可达数万条,展开传参会爆调用栈
+      for (const event of newEvents) {
+        feed.push(event);
+      }
       if (feed.length > FEED_LIMIT) {
         feed.splice(0, feed.length - FEED_LIMIT);
       }
@@ -695,11 +756,13 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
     return card;
   }
 
-  /** 日程页渲染:结果卡 + 练级地图一览 + 小队分配 + 5 人本一览与下本分配(规则一律在 sim)。 */
+  /** 日程页渲染:下一场倒计时 + 活动队列 + 结果卡 + 练级/下本一览与分配(规则一律在 sim)。 */
   function renderSchedule(state: GameState): void {
     const averageLevel = guildAverageLevel(state.members);
     const averageItemLevel = guildAverageItemLevel(state.members);
     levelingAvgEl.textContent = `公会平均等级 ${averageLevel} · 平均装等 ${averageItemLevel}`;
+    renderCountdown(state);
+    renderQueue(state);
     renderDungeonReport(state.lastDungeonRun);
 
     // 地图卡:等级带与收益/损耗差异明确标示,未解锁地图给出带下限门槛(数值只读自内容表)
@@ -871,6 +934,90 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
         return row;
       }),
     );
+  }
+
+  /** 下一场结算倒计时:游戏时间/现实时间双显(派生量来自 sim/schedule,换算常量在 sim/clock)。 */
+  function renderCountdown(state: GameState): void {
+    const countdown = nextSettlement(state);
+    settlementTagEl.textContent = countdown.isWeekBoundary ? '周更 · 团本 CD 重置' : '日更';
+    settlementCountdownEl.textContent = formatGameDuration(countdown.remainingGameMinutes);
+    settlementDualEl.textContent = `${formatGameStamp(countdown.atGameMinutes)} · 约 ${formatRealDuration(
+      gameMinutesToRealMs(countdown.remainingGameMinutes),
+    )}(现实)后结算`;
+  }
+
+  /** 活动队列:全部已排活动按编成顺序(派生量来自 sim/schedule)。 */
+  function renderQueue(state: GameState): void {
+    const entries = activityQueue(state);
+    queueSubEl.textContent = entries.length > 0 ? `${entries.length} 项进行中` : '空闲';
+    if (entries.length === 0) {
+      queueListEl.replaceChildren(
+        el('li', 'empty-hint', '暂无进行中的活动 —— 在下方安排小队练级或下本,队列会显示在这里。'),
+      );
+      return;
+    }
+    queueListEl.replaceChildren(
+      ...entries.map((entry) => {
+        const row = el('li', 'queue-row');
+        const info = el('div', 'queue-info');
+        info.append(el('span', 'queue-squad', `第 ${entry.squadOrdinal} 小队`));
+        const title = el('span', 'queue-name');
+        title.append(
+          el('span', `queue-kind queue-kind-${entry.kind === '练级' ? 'leveling' : 'dungeon'}`, entry.kind),
+        );
+        title.append(document.createTextNode(entry.name));
+        info.append(title);
+        row.append(info);
+        row.append(
+          el(
+            'span',
+            'queue-cadence',
+            entry.kind === '练级'
+              ? `${entry.tier}区 · 经验 ${entry.perDay}/日`
+              : `${entry.tier}档 · 每日 ${entry.perDay} 次`,
+          ),
+        );
+        return row;
+      }),
+    );
+  }
+
+  /** 离线归来摘要卡:数据全部由装配层统计,此处只渲染(验收标准 1 的呈现面)。 */
+  function showOfflineHarvest(view: OfflineHarvestView | null): void {
+    if (view === null) {
+      offlineHarvestEl.hidden = true;
+      return;
+    }
+    const card = el('div', 'harvest-card');
+    const head = el('div', 'harvest-head');
+    head.append(el('span', 'harvest-title', '离线归来'));
+    head.append(el('span', 'harvest-away', `离线 ${view.awayText}(现实)`));
+    card.append(head);
+    card.append(
+      el(
+        'p',
+        'harvest-line',
+        `离开期间公会同速运转:推进了 ${view.advancedText}(游戏时间),${view.fromStamp} → ${view.toStamp}。`,
+      ),
+    );
+    if (view.highlights.length > 0) {
+      const list = el('ul', 'harvest-highlights');
+      for (const line of view.highlights) {
+        list.append(el('li', 'harvest-highlight', line));
+      }
+      card.append(list);
+    }
+    card.append(
+      el('p', 'harvest-note', `期间共 ${view.eventCount} 条事件,已按发生顺序记入下方日志(展示最近条目)。`),
+    );
+    const close = el('button', 'harvest-close', '知道了');
+    close.type = 'button';
+    close.addEventListener('click', () => {
+      offlineHarvestEl.hidden = true; // 收起是纯展示行为
+    });
+    card.append(close);
+    offlineHarvestEl.replaceChildren(card);
+    offlineHarvestEl.hidden = false;
   }
 
   /** 结果卡:最近一次下本的成败、三要素与掉落去向(数据来自状态,规则都在 sim)。 */
@@ -1167,7 +1314,7 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
     return Math.max(0, Math.min(100, value));
   }
 
-  return { render, clearFeed };
+  return { render, clearFeed, showOfflineHarvest };
 }
 
 function el<K extends keyof HTMLElementTagNameMap>(

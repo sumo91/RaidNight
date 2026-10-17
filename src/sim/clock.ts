@@ -51,3 +51,12 @@ export function minuteOfDay(minutes: number): number {
 export function realMsToGameMinutes(realMs: number): number {
   return realMs * GAME_MINUTES_PER_REAL_MS;
 }
+
+/**
+ * 游戏分钟 → 现实毫秒(同一比率常量的逆换算)。
+ * 只作展示换算(倒计时/离线摘要的「现实还需多久」);不得用于推进游戏时间 ——
+ * 现实时间进入模拟的唯一路径仍是装配层的 realMsToGameMinutes + 门面增量。
+ */
+export function gameMinutesToRealMs(gameMinutes: number): number {
+  return gameMinutes / GAME_MINUTES_PER_REAL_MS;
+}

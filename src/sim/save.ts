@@ -19,14 +19,22 @@ export const SAVE_KIND = 'wowidle-save';
  * - v1(T4 及以前):无经验维度;
  * - v2(T5):团员含经验(experience),小队活动(activity)可缺省;
  * - v3(T6):活动含下本(dungeon),状态新增 lastDungeonRun(可缺省);
- * - v4(T7):封皮新增 kind 标记(导出/导入文件先验校验),状态结构无变化。
+ * - v4(T7):封皮新增 kind 标记(导出/导入文件先验校验),状态结构无变化;
+ * - v5(T9):封皮新增 savedAtMs(存档落盘的现实毫秒时间戳,离线结算的起测点,
+ *   ADR-0003「基于时间戳推进、离线结算幂等」;可缺省 = 0,不触发补结算)。
  */
-export const SAVE_VERSION = 4;
+export const SAVE_VERSION = 5;
 
 /** 版本化存档封皮:v1–v3 的本机旧档没有 kind,读入时视为 legacy。 */
 export interface SaveFile {
   readonly kind?: typeof SAVE_KIND;
   readonly version: number;
+  /**
+   * 存档落盘时刻(现实毫秒时间戳)。由装配层写入与解读(现实时钟只存在于
+   * src/main.ts);sim 只存取不解读 —— 0/缺省表示「不带时间基准」,
+   * 恢复时不做离线补结算。
+   */
+  readonly savedAtMs?: number;
   readonly state: GameState;
 }
 
@@ -44,18 +52,28 @@ const MIGRATIONS: Readonly<Record<number, Migration>> = {
   2: (state) => ({ ...state, lastDungeonRun: state.lastDungeonRun ?? undefined }),
   // v3 → v4:封皮级变化(新增 kind),状态无必补字段
   3: (state) => state,
+  // v4 → v5:封皮级变化(新增 savedAtMs 时间基准),状态无必补字段
+  4: (state) => state,
 };
 
 /** 编码:状态 → 存档文本(localStorage 值与导出文件内容共用)。 */
-export function encodeSave(state: GameState): string {
-  return JSON.stringify({ kind: SAVE_KIND, version: SAVE_VERSION, state } satisfies SaveFile);
+export function encodeSave(state: GameState, savedAtMs = 0): string {
+  return JSON.stringify({ kind: SAVE_KIND, version: SAVE_VERSION, savedAtMs, state } satisfies SaveFile);
+}
+
+/** 解码结果:状态 + 封皮携带的存档时间基准(离线结算的起测点)。 */
+export interface DecodedSave {
+  readonly state: GameState;
+  /** 存档落盘时刻(现实毫秒);0 = 存档不带时间基准(旧档/缺省) */
+  readonly savedAtMs: number;
 }
 
 /**
- * 解码:存档文本 → 状态;损坏、非本游戏文件、未知(含未来)版本、
- * 结构不完整一律返回 null(调用方回退新档或提示导入失败,不中断游戏)。
+ * 解码:存档文本 → 状态 + 存档时间基准;损坏、非本游戏文件、
+ * 未知(含未来)版本、结构不完整一律返回 null(调用方回退新档或提示导入失败)。
+ * 离线结算(装配层)需要封皮里的 savedAtMs,故经本函数取完整封皮。
  */
-export function decodeSave(raw: string): GameState | null {
+export function decodeSaveEnvelope(raw: string): DecodedSave | null {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -65,8 +83,8 @@ export function decodeSave(raw: string): GameState | null {
   if (typeof parsed !== 'object' || parsed === null) {
     return null;
   }
-  const file = parsed as { kind?: unknown; version?: unknown; state?: unknown };
-  // kind 缺省 = v1–v3 本机旧档(可迁移);给出了但不匹配 = 不是本游戏的存档
+  const file = parsed as { kind?: unknown; version?: unknown; savedAtMs?: unknown; state?: unknown };
+  // kind 缺省 = v1–v4 本机旧档(可迁移);给出了但不匹配 = 不是本游戏的存档
   if (file.kind !== undefined && file.kind !== SAVE_KIND) {
     return null;
   }
@@ -84,7 +102,23 @@ export function decodeSave(raw: string): GameState | null {
   for (let version = file.version; version < SAVE_VERSION; version++) {
     state = MIGRATIONS[version]!(state);
   }
-  return looksLikeGameState(state) ? state : null;
+  if (!looksLikeGameState(state)) {
+    return null;
+  }
+  // 时间基准防御:非有限数或负数(时钟回拨的怪档)一律按「无基准」处理
+  const savedAtMs =
+    typeof file.savedAtMs === 'number' && Number.isFinite(file.savedAtMs) && file.savedAtMs > 0
+      ? file.savedAtMs
+      : 0;
+  return { state, savedAtMs };
+}
+
+/**
+ * 解码:存档文本 → 状态(只要状态不要时间基准时的便捷入口;
+ * 规则与 decodeSaveEnvelope 完全一致)。
+ */
+export function decodeSave(raw: string): GameState | null {
+  return decodeSaveEnvelope(raw)?.state ?? null;
 }
 
 /** 结构防御:关键字段缺失/类型不对视为损坏(迁移后的最终形态必须完整)。 */
