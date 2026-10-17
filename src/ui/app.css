@@ -75,6 +75,55 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+/* 存档操作行:自动存档说明 + 手动导出/导入(ADR-0003) */
+.save-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.save-hint {
+  flex: 1;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.save-btn {
+  background: #2a2140;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 3px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.save-btn:hover {
+  background: #382c55;
+}
+
+/* 存档操作结果提示:短暂浮现后自动消退 */
+.save-toast {
+  position: fixed;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 20;
+  margin: 0;
+  padding: 6px 14px;
+  border-radius: 8px;
+  background: #2f5a3a;
+  border: 1px solid #4c8760;
+  color: var(--text);
+  font-size: 12.5px;
+}
+
+.save-toast.save-toast-fail {
+  background: #5a2f35;
+  border-color: #874c53;
+}
+
 .panes {
   flex: 1;
   overflow: auto;

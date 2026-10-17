@@ -1,5 +1,5 @@
-import { GAME_MINUTES_PER_REAL_MS, realMsToGameMinutes } from './sim/clock';
-import { SimulationFacade } from './sim/facade';
+import { GAME_MINUTES_PER_REAL_MS, gameDay, gameWeek, realMsToGameMinutes } from './sim/clock';
+import { SimulationFacade, decodeSave, encodeSave } from './sim/facade';
 import type { GameState } from './sim/state';
 import { mountApp } from './ui/app';
 import './ui/app.css';
@@ -7,87 +7,32 @@ import './ui/app.css';
 /**
  * 装配层:创建模拟门面、挂载薄渲染层、把现实时间换算成游戏时间增量。
  * 这是全项目唯一允许出现「现实时间」的地方(ADR-0004:1 现实天 = 1 游戏周,无现实时间硬门)。
- * 持久化也只在这里:GameState 可序列化(ADR-0003 格式自第一版起版本化),
- * 每次推进后写入本地存储,重开应用时恢复 —— 编成等一切门面状态不丢。
+ * 持久化也只在这里:编码/解码/迁移是 sim 纯函数(sim/save.ts),
+ * 介质读写(localStorage、导出下载、导入上传)在本层 —— 每次推进后自动落盘,
+ * 重开应用时恢复,进度不丢;导出/导入共用同一版本化格式(ADR-0003)。
  */
 
 /** 开发期固定种子;无存档时用于建会。 */
 const SEED = 20261018;
-/** 存档键与格式版本(ADR-0003:格式版本化,升版走迁移)。 */
+/** 本机自动存档的存储键(格式与版本见 sim/save.ts)。 */
 const SAVE_KEY = 'wowidle.save';
-/** v3 = T6:小队活动新增下本(dungeon)安排,状态新增最近下本结果(lastDungeonRun,可缺省)。 */
-const SAVE_VERSION = 3;
 /** 现实时钟采样间隔(毫秒);与游戏内节奏无关,只影响 UI 帧率。 */
 const TICK_INTERVAL_MS = 500;
 
-/** 版本化存档封皮。 */
-interface SaveFile {
-  readonly version: number;
-  readonly state: GameState;
-}
-
-/** 读取存档:缺失、损坏或结构不完整一律返回 null(回退新档,不中断游戏)。 */
+/** 读取本机存档:缺失、损坏或版本无法迁移一律返回 null(回退新档,不中断游戏)。 */
 function loadSave(): GameState | null {
   try {
     const raw = localStorage.getItem(SAVE_KEY);
-    if (raw === null) {
-      return null;
-    }
-    const parsed: unknown = JSON.parse(raw);
-    if (typeof parsed !== 'object' || parsed === null) {
-      return null;
-    }
-    const file = parsed as { version?: unknown; state?: unknown };
-    if (typeof file.state !== 'object' || file.state === null) {
-      return null;
-    }
-    // 升版走迁移(ADR-0003):v1(T4 及以前)→ v2 = 补经验字段;v2 → v3 = 无必补字段
-    if (file.version === 1) {
-      return migrateV1(file.state as GameState);
-    }
-    if (file.version === 2) {
-      return migrateV2(file.state as GameState);
-    }
-    if (file.version !== SAVE_VERSION) {
-      return null;
-    }
-    const state = file.state as GameState;
-    // 结构防御:关键字段缺失视为损坏(重开不丢依赖这些字段的完整性)
-    if (
-      !Array.isArray(state.members) ||
-      !state.members.every((m) => typeof m.experience === 'number') ||
-      !Array.isArray(state.squads) ||
-      !Array.isArray(state.applicants) ||
-      typeof state.nextMemberId !== 'number' ||
-      typeof state.nextSquadId !== 'number' ||
-      typeof state.clockGameMinutes !== 'number' ||
-      typeof state.rngState !== 'number'
-    ) {
-      return null;
-    }
-    return state;
+    return raw === null ? null : decodeSave(raw);
   } catch {
     return null;
   }
 }
 
-/** v1 → v2 迁移:老档团员补经验维度(0);其余字段兼容(小队 activity 可缺省)。 */
-function migrateV1(state: GameState): GameState {
-  return migrateV2({
-    ...state,
-    members: state.members.map((member) => ({ ...member, experience: member.experience ?? 0 })),
-  });
-}
-
-/** v2 → v3 迁移:下本相关字段全部可缺省(lastDungeonRun 缺省视为尚未下过本)。 */
-function migrateV2(state: GameState): GameState {
-  return { ...state, lastDungeonRun: state.lastDungeonRun ?? undefined };
-}
-
-/** 写入存档:存储不可用(隐私模式等)时静默降级为本局内存态。 */
+/** 写入本机存档:存储不可用(隐私模式等)时静默降级为本局内存态。 */
 function persist(state: GameState): void {
   try {
-    localStorage.setItem(SAVE_KEY, JSON.stringify({ version: SAVE_VERSION, state } satisfies SaveFile));
+    localStorage.setItem(SAVE_KEY, encodeSave(state));
   } catch {
     // 本局照常运行,只是不落盘
   }
@@ -103,6 +48,22 @@ function wipeSave(): void {
   window.location.reload();
 }
 
+/** 导出存档文件:文件名只用游戏时间与公会名(不引入现实时间)。 */
+function exportSaveFile(state: GameState): void {
+  const safeName = state.guild.name.replace(/[\\/:*?"<>|]/g, '_');
+  const fileName = `wowidle-${safeName}-第${gameWeek(state.clockGameMinutes)}周第${gameDay(state.clockGameMinutes)}天.json`;
+  const blob = new Blob([encodeSave(state)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  try {
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = fileName;
+    anchor.click();
+  } finally {
+    window.setTimeout(() => URL.revokeObjectURL(url), 0);
+  }
+}
+
 const saved = loadSave();
 const facade = new SimulationFacade(SEED, undefined, saved ?? undefined);
 
@@ -113,6 +74,19 @@ const app = mountApp(document.getElementById('app')!, {
     app.render(output.state, output.events);
   },
   wipeSave,
+  exportSave: () => exportSaveFile(facade.state),
+  importSave: (text) => {
+    // 解码 + 迁移 + 结构校验都在 sim;失败返回 false(UI 提示导入失败)
+    const state = decodeSave(text);
+    if (state === null) {
+      return false;
+    }
+    facade.restore(state);
+    persist(state); // 立即落盘:导入即成本机最新进度
+    app.clearFeed(); // 旧实例的滚动日志不属于新进度
+    app.render(state, []);
+    return true;
+  },
 });
 app.render(facade.state, []);
 persist(facade.state);

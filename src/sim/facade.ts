@@ -12,6 +12,9 @@ import { generateApplicantPool } from './recruit';
 import { pickOne } from './rng';
 import { createInitialState, normalizeGuildName, type GameState, type Member, type Squad } from './state';
 
+// 存档 API 经门面接缝对外暴露(ADR-0003:版本化 + 迁移;纯函数见 sim/save.ts)
+export { decodeSave, encodeSave, SAVE_KIND, SAVE_VERSION, type SaveFile } from './save';
+
 /**
  * 模拟门面 —— 全项目唯一测试接缝。
  *
@@ -351,5 +354,13 @@ export class SimulationFacade {
     const output = step(this._state, input);
     this._state = output.state;
     return output;
+  }
+
+  /**
+   * 整体替换内部状态:装配层导入存档后的恢复入口(验收标准 2)。
+   * 只换状态、不产生事件(日志是门面输出,不在存档内;UI 侧自行清空滚动日志)。
+   */
+  restore(state: GameState): void {
+    this._state = state;
   }
 }

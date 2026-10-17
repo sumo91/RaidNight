@@ -24,6 +24,8 @@ import { formatGameClock, formatGameStamp } from './format';
 export interface AppHandle {
   /** 用新状态重渲染;newEvents 追加进滚动日志缓冲。 */
   render(state: GameState, newEvents: readonly SimEvent[]): void;
+  /** 清空滚动日志缓冲(导入存档恢复另一进度时调用;事件日志不在存档内)。 */
+  clearFeed(): void;
 }
 
 export interface MountOptions {
@@ -31,6 +33,10 @@ export interface MountOptions {
   dispatch: (input: SimInput) => void;
   /** 清空本地存档并重开(装配层拥有持久化;UI 不关心存储介质)。 */
   wipeSave?: () => void;
+  /** 导出存档文件(装配层负责编码与下载;UI 只触发)。 */
+  exportSave?: () => void;
+  /** 导入存档文本,返回是否恢复成功(解码/迁移规则一律在 sim,UI 不做校验)。 */
+  importSave?: (text: string) => boolean;
 }
 
 /** 五页签(DESIGN.md:名册/编成/日程/世界/金库·荣誉);名册是首页(ADR-0006 组建之乐)。 */
@@ -63,6 +69,11 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
         <span class="member-count" data-ref="member-count"></span>
       </div>
       <div class="game-clock" data-ref="game-clock"></div>
+      <div class="save-row">
+        <span class="save-hint">进度自动保存在本机</span>
+        <button type="button" class="save-btn" data-action="export-save">导出存档</button>
+        <button type="button" class="save-btn" data-action="import-save">导入存档</button>
+      </div>
     </header>
     <main class="panes">
       <section class="pane" data-pane="roster">
@@ -135,6 +146,7 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
         <li class="feed-empty">暂无事件 —— 游戏时间推进后会在这里出现日更与周更。</li>
       </ul>
     </section>
+    <p class="save-toast" data-ref="save-toast" hidden></p>
     <div class="dev-strip">
       <span class="dev-label">调试</span>
       <button type="button" data-dev="day">+1 游戏日</button>
@@ -150,6 +162,7 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
   const guildNameEl = requireElement<HTMLHeadingElement>(root, 'guild-name');
   const memberCountEl = requireElement<HTMLSpanElement>(root, 'member-count');
   const gameClockEl = requireElement<HTMLDivElement>(root, 'game-clock');
+  const saveToastEl = requireElement<HTMLParagraphElement>(root, 'save-toast');
   const feedEl = requireElement<HTMLUListElement>(root, 'event-feed');
   const rosterBrowseEl = requireElement<HTMLDivElement>(root, 'roster-browse');
   const rosterListEl = requireElement<HTMLUListElement>(root, 'roster-list');
@@ -202,6 +215,45 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
       options.wipeSave?.();
     }
   });
+
+  // 存档操作:导出/导入都是装配层的事(编码、下载、解码、迁移、恢复);
+  // UI 只做触发、文件选择与结果提示 —— 不含任何存档规则
+  root.querySelector<HTMLButtonElement>('[data-action="export-save"]')?.addEventListener('click', () => {
+    options.exportSave?.();
+    showSaveToast('存档已导出为文件。', true);
+  });
+  root.querySelector<HTMLButtonElement>('[data-action="import-save"]')?.addEventListener('click', () => {
+    if (!window.confirm('导入存档将覆盖当前进度,确定继续?')) {
+      return;
+    }
+    // 文件选择与读取是纯输入采集;文本交给装配层 → sim 解码迁移
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json,application/json';
+    input.onchange = () => {
+      const file = input.files?.[0];
+      if (file === undefined) {
+        return;
+      }
+      void file.text().then((text) => {
+        const ok = options.importSave?.(text) ?? false;
+        showSaveToast(ok ? '存档导入成功,进度已恢复。' : '导入失败:不是有效的存档文件。', ok);
+      });
+    };
+    input.click();
+  });
+
+  /** 存档操作结果提示(纯展示;自动消退)。 */
+  let toastTimer: number | undefined;
+  function showSaveToast(text: string, ok: boolean): void {
+    saveToastEl.textContent = text;
+    saveToastEl.classList.toggle('save-toast-fail', !ok);
+    saveToastEl.hidden = false;
+    window.clearTimeout(toastTimer);
+    toastTimer = window.setTimeout(() => {
+      saveToastEl.hidden = true;
+    }, 2600);
+  }
 
   // 编成页操作:只是把「建队/编入/调离/解散」转交给门面裁决(规则一律在 sim)
   squadListEl.addEventListener('click', (event) => {
@@ -357,6 +409,14 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
   });
 
   const feed: SimEvent[] = [];
+
+  /** 清空滚动日志缓冲,恢复「暂无事件」占位(导入存档恢复另一进度时调用)。 */
+  function clearFeed(): void {
+    feed.length = 0;
+    feedEl.replaceChildren(
+      el('li', 'feed-empty', '暂无事件 —— 游戏时间推进后会在这里出现日更与周更。'),
+    );
+  }
 
   function render(state: GameState, newEvents: readonly SimEvent[]): void {
     latestState = state;
@@ -1099,7 +1159,7 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
     return Math.max(0, Math.min(100, value));
   }
 
-  return { render };
+  return { render, clearFeed };
 }
 
 function el<K extends keyof HTMLElementTagNameMap>(
