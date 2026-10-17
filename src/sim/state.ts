@@ -13,6 +13,8 @@ export interface MemberProfile {
   readonly classId: string;
   readonly specId: string;
   readonly level: number;
+  /** 当前等级内已累计的经验(升级公式见 sim/leveling.ts) */
+  readonly experience: number;
   /** 8 部位装备,顺序同 content/gear.GEAR_SLOTS */
   readonly gear: readonly GearItem[];
   /** 心情(0-100) */
@@ -57,7 +59,14 @@ export interface Applicant {
 export interface Squad {
   readonly id: number;
   readonly memberIds: readonly number[];
+  /** 当前活动安排;缺省 = 待命休整(疲劳自然恢复,见 sim/leveling.ts) */
+  readonly activity?: SquadActivity;
 }
+
+/** 小队活动:练级(进驻地图);后续工单(5 人本等)在此扩展类型。 */
+export type SquadActivity =
+  /** 练级:进驻某张练级地图,自动层逐日结算 */
+  | { readonly type: 'leveling'; readonly mapId: string };
 
 /** 单件装备:部位 + 品质 + 装等(物品表见后续装备工单)。 */
 export interface GearItem {

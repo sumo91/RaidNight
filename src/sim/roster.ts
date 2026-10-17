@@ -13,3 +13,12 @@ export function averageItemLevel(profile: MemberProfile): number {
   const total = profile.gear.reduce((sum, item) => sum + item.itemLevel, 0);
   return Math.round(total / profile.gear.length);
 }
+
+/** 公会平均等级:名册全员(含会长角色)等级的向下取整均值;空名册为 0。练级地图的解锁刻度。 */
+export function guildAverageLevel(members: readonly MemberProfile[]): number {
+  if (members.length === 0) {
+    return 0;
+  }
+  const total = members.reduce((sum, member) => sum + member.level, 0);
+  return Math.floor(total / members.length);
+}

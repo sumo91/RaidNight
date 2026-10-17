@@ -134,6 +134,7 @@ export function generateMemberProfile(
       classId: cls.id,
       specId: spec.id,
       level,
+      experience: 0, // 入册即 0 经验起步,成长由练级活动积累
       gear,
       mood,
       loyalty,

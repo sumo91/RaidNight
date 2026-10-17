@@ -15,7 +15,8 @@ import './ui/app.css';
 const SEED = 20261018;
 /** 存档键与格式版本(ADR-0003:格式版本化,升版走迁移)。 */
 const SAVE_KEY = 'wowidle.save';
-const SAVE_VERSION = 1;
+/** v2 = T5:团员新增经验(experience)维度,小队新增活动(activity)安排。 */
+const SAVE_VERSION = 2;
 /** 现实时钟采样间隔(毫秒);与游戏内节奏无关,只影响 UI 帧率。 */
 const TICK_INTERVAL_MS = 500;
 
@@ -37,13 +38,21 @@ function loadSave(): GameState | null {
       return null;
     }
     const file = parsed as { version?: unknown; state?: unknown };
-    if (file.version !== SAVE_VERSION || typeof file.state !== 'object' || file.state === null) {
+    if (typeof file.state !== 'object' || file.state === null) {
+      return null;
+    }
+    // 升版走迁移(ADR-0003):v1(T4 及以前)→ v2 = 补经验字段(0 起步)
+    if (file.version === 1) {
+      return migrateV1(file.state as GameState);
+    }
+    if (file.version !== SAVE_VERSION) {
       return null;
     }
     const state = file.state as GameState;
     // 结构防御:关键字段缺失视为损坏(重开不丢依赖这些字段的完整性)
     if (
       !Array.isArray(state.members) ||
+      !state.members.every((m) => typeof m.experience === 'number') ||
       !Array.isArray(state.squads) ||
       !Array.isArray(state.applicants) ||
       typeof state.nextMemberId !== 'number' ||
@@ -57,6 +66,14 @@ function loadSave(): GameState | null {
   } catch {
     return null;
   }
+}
+
+/** v1 → v2 迁移:老档团员补经验维度(0);其余字段兼容(小队 activity 可缺省)。 */
+function migrateV1(state: GameState): GameState {
+  return {
+    ...state,
+    members: state.members.map((member) => ({ ...member, experience: member.experience ?? 0 })),
+  };
 }
 
 /** 写入存档:存储不可用(隐私模式等)时静默降级为本局内存态。 */

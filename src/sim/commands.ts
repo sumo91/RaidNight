@@ -20,7 +20,11 @@ export type GuildCommand =
   /** 编入小队(已在别队则先调离;小队满员则拒绝) */
   | { readonly type: 'assignToSquad'; readonly memberId: number; readonly squadId: number }
   /** 调离小队(回到待命名册) */
-  | { readonly type: 'removeFromSquad'; readonly memberId: number };
+  | { readonly type: 'removeFromSquad'; readonly memberId: number }
+  /** 安排小队练级(进驻已解锁地图;未解锁/未知名图由门面忽略) */
+  | { readonly type: 'assignLevelingMap'; readonly squadId: number; readonly mapId: string }
+  /** 停止小队练级(回城休整,疲劳自然恢复) */
+  | { readonly type: 'stopLeveling'; readonly squadId: number };
 
 /** 公会名长度上限(规则只存在于 sim,UI 不做校验)。 */
 export const GUILD_NAME_MAX_LENGTH = 24;

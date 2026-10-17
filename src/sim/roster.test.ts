@@ -199,15 +199,19 @@ describe('生成规则数据驱动(验收标准 5)', () => {
   });
 });
 
-describe('门面推进不改名册(T2 内名册只读)', () => {
-  it('时间推进与指令均保持 members 不变(引用与内容)', () => {
+describe('门面推进对名册的作用(T5 起:无练级安排时仅休整恢复疲劳)', () => {
+  it('时间推进与指令均不改名册的其余维度;疲劳只会因休整下降', () => {
     const facade = new SimulationFacade(88, '星盾公会');
     const before = structuredClone(facade.state.members);
-    const output = facade.dispatch({ deltaGameMinutes: GAME_MINUTES_PER_WEEK });
-    expect(facade.state.members).toEqual(before);
-    expect(output.state.members).toBe(facade.state.members); // 未重建数组
+    facade.dispatch({ deltaGameMinutes: GAME_MINUTES_PER_WEEK });
+    for (const member of facade.state.members) {
+      const old = before.find((m) => m.id === member.id)!;
+      expect({ ...member, fatigue: 0 }).toEqual({ ...old, fatigue: 0 }); // 除疲劳外一切不变
+      expect(member.fatigue).toBeLessThanOrEqual(old.fatigue); // 休整只降疲劳
+    }
+    const beforeRename = structuredClone(facade.state.members);
     facade.dispatch({ command: { type: 'renameGuild', name: '新名字' }, deltaGameMinutes: 0 });
-    expect(facade.state.members).toEqual(before);
+    expect(facade.state.members).toEqual(beforeRename); // 指令路径不触名册
   });
 
   it('纯函数 step:同状态 + 同输入对名册的输出确定', () => {

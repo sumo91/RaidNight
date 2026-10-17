@@ -1,8 +1,11 @@
 import { DAILY_FLAVOR_POOL } from '../content/daily-flavor';
 import { COMP } from '../content/comp';
+import { LEVELING_MAP_BY_ID } from '../content/maps';
 import type { GuildCommand } from './commands';
 import { GAME_MINUTES_PER_DAY, GAME_MINUTES_PER_WEEK, gameDay, gameWeek } from './clock';
 import type { SimEvent, SimEventKind } from './events';
+import { guildAverageLevel } from './roster';
+import { settleLevelingDay, squadLevelingMap } from './leveling';
 import { generateApplicantPool } from './recruit';
 import { pickOne } from './rng';
 import { createInitialState, normalizeGuildName, type GameState, type Member, type Squad } from './state';
@@ -166,6 +169,48 @@ function applyCommand(state: GameState, command: GuildCommand, collector: EventC
       collector.push(state.clockGameMinutes, '编成', `「${member.name}」调离第 ${index + 1} 小队。`);
       return { ...state, squads: removeFromSquads(state.squads, member.id) };
     }
+    case 'assignLevelingMap': {
+      const index = state.squads.findIndex((squad) => squad.id === command.squadId);
+      if (index === -1) {
+        return state; // 小队不存在:忽略
+      }
+      const map = LEVELING_MAP_BY_ID.get(command.mapId);
+      if (map === undefined) {
+        return state; // 地图不在内容表:忽略
+      }
+      // 解锁校验只发生在安排时刻:公会平均等级达到门槛才可进驻
+      // (安排之后平均等级回落不打断进行中的练级)
+      if (guildAverageLevel(state.members) < map.unlockAverageLevel) {
+        return state; // 未解锁:忽略
+      }
+      const current = squadLevelingMap(state.squads[index]!);
+      if (current?.id === map.id) {
+        return state; // 已在该地图:无变化、无事件
+      }
+      collector.push(
+        state.clockGameMinutes,
+        '练级',
+        `第 ${index + 1} 小队进驻「${map.name}」(${map.tier}区)练级。`,
+      );
+      const squads = state.squads.map((squad, i) =>
+        i === index ? { ...squad, activity: { type: 'leveling' as const, mapId: map.id } } : squad,
+      );
+      return { ...state, squads };
+    }
+    case 'stopLeveling': {
+      const index = state.squads.findIndex((squad) => squad.id === command.squadId);
+      if (index === -1) {
+        return state; // 小队不存在:忽略
+      }
+      if (squadLevelingMap(state.squads[index]!) === undefined) {
+        return state; // 本就没有练级安排(或地图已失效):忽略
+      }
+      collector.push(state.clockGameMinutes, '练级', `第 ${index + 1} 小队结束练级,回城休整。`);
+      const squads = state.squads.map((squad, i) =>
+        i === index ? { ...squad, activity: undefined } : squad,
+      );
+      return { ...state, squads };
+    }
   }
 }
 
@@ -185,10 +230,12 @@ function advanceClock(state: GameState, delta: number, collector: EventCollector
   const target = state.clockGameMinutes + delta;
   let cursor = state.clockGameMinutes;
   let rngState = state.rngState;
+  let members = state.members;
   let applicants = state.applicants;
   let nextApplicationId = state.nextApplicationId;
 
   // 逐个跨越的边界结算;游戏周边界必是游戏日边界(分钟数整除)。
+  // 日界结算顺序固定:日更文案 → 申请池刷新 → 练级/休整(自动层)→(周更)。
   for (;;) {
     const nextDayAt = (Math.floor(cursor / GAME_MINUTES_PER_DAY) + 1) * GAME_MINUTES_PER_DAY;
     const nextWeekAt = (Math.floor(cursor / GAME_MINUTES_PER_WEEK) + 1) * GAME_MINUTES_PER_WEEK;
@@ -203,18 +250,23 @@ function advanceClock(state: GameState, delta: number, collector: EventCollector
     collector.push(nextAt, '日更', `第 ${gameDay(nextAt)} 天:${flavor}`);
 
     // 申请池每日刷新:未处理的申请全部作废,按当日声望规格重生成(GLOSSARY:申请池)
-    const pool = generateApplicantPool(rngState, state.reputation, state.members, nextApplicationId);
+    const pool = generateApplicantPool(rngState, state.reputation, members, nextApplicationId);
     rngState = pool.rngState;
     applicants = pool.applicants;
     nextApplicationId = pool.nextApplicationId;
     collector.push(nextAt, '招募', `申请池刷新:${applicants.length} 名冒险者递来了申请。`);
+
+    // 练级结算(自动层,静默计数):进驻地图的队员成长与积劳,其余全员休整
+    const day = settleLevelingDay(members, state.squads, rngState);
+    members = day.members;
+    rngState = day.rngState;
 
     if (nextAt === nextWeekAt) {
       collector.push(nextAt, '周更', `第 ${gameWeek(nextAt)} 周开始,团本 CD 已重置。`);
     }
   }
 
-  return { ...state, clockGameMinutes: target, rngState, applicants, nextApplicationId };
+  return { ...state, clockGameMinutes: target, rngState, members, applicants, nextApplicationId };
 }
 
 /** 门面对象:封装当前状态,供装配层(UI)与测试驱动。 */

@@ -2,13 +2,15 @@ import { ATTENDANCE_BY_ID } from '../content/attendance';
 import { COMP } from '../content/comp';
 import { CLASS_BY_ID } from '../content/classes';
 import type { Quality } from '../content/gear';
+import { LEVELING } from '../content/maps';
 import { SKILL_TIER_BY_ID } from '../content/skill-tiers';
 import { TRAIT_BY_ID } from '../content/traits';
 import { GAME_MINUTES_PER_DAY, GAME_MINUTES_PER_WEEK } from '../sim/clock';
 import type { SimInput } from '../sim/facade';
 import type { SimEvent } from '../sim/events';
 import { squadCompositions, teamCheck, unassignedMembers } from '../sim/comp';
-import { averageItemLevel } from '../sim/roster';
+import { levelingMapStatuses, squadLevelingMap, xpToNextLevel } from '../sim/leveling';
+import { averageItemLevel, guildAverageLevel } from '../sim/roster';
 import type { GameState, Member } from '../sim/state';
 import { formatGameClock, formatGameStamp } from './format';
 
@@ -93,7 +95,16 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
         </div>
       </section>
       <section class="pane" data-pane="schedule" hidden>
-        <p class="empty-hint">「日程」页签在后续工单开放。</p>
+        <div class="leveling-head">
+          <h2 class="section-title">练级安排</h2>
+          <span class="leveling-avg" data-ref="leveling-avg"></span>
+        </div>
+        <p class="leveling-note">高效区经验多、疲劳与阵亡损耗高;休闲区反之。未安排练级的小队回城休整,疲劳自然恢复。</p>
+        <ul class="map-list" data-ref="map-list"></ul>
+        <div class="pool-head assign-head">
+          <h2 class="section-title">小队分配</h2>
+        </div>
+        <ul class="assign-list" data-ref="assign-list"></ul>
       </section>
       <section class="pane" data-pane="world" hidden>
         <p class="empty-hint">「世界」页签在后续工单开放。</p>
@@ -135,6 +146,9 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
   const squadListEl = requireElement<HTMLUListElement>(root, 'squad-list');
   const benchSubEl = requireElement<HTMLSpanElement>(root, 'bench-sub');
   const benchListEl = requireElement<HTMLUListElement>(root, 'bench-list');
+  const levelingAvgEl = requireElement<HTMLSpanElement>(root, 'leveling-avg');
+  const mapListEl = requireElement<HTMLUListElement>(root, 'map-list');
+  const assignListEl = requireElement<HTMLUListElement>(root, 'assign-list');
 
   // 页签切换:纯展示行为(哪个 pane 可见),不是业务规则
   let activeTab: TabId = 'roster';
@@ -251,6 +265,34 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
     }
   });
 
+  // 练级分配操作:只是把「进驻/停止练级」转交给门面裁决
+  // (解锁校验、地图存在性一律在 sim;此处不禁用、不做规则判断)
+  assignListEl.addEventListener('click', (event) => {
+    const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-action]');
+    if (button === null || button.disabled) {
+      return;
+    }
+    const row = button.closest<HTMLElement>('[data-squad-id]');
+    if (row === null) {
+      return;
+    }
+    const squadId = Number(row.dataset.squadId);
+    if (button.dataset.action === 'stop-leveling') {
+      options.dispatch({ command: { type: 'stopLeveling', squadId }, deltaGameMinutes: 0 });
+      return;
+    }
+    if (button.dataset.action === 'assign-leveling') {
+      const select = row.querySelector<HTMLSelectElement>('select');
+      if (select === null || select.value === '') {
+        return;
+      }
+      options.dispatch({
+        command: { type: 'assignLevelingMap', squadId, mapId: select.value },
+        deltaGameMinutes: 0,
+      });
+    }
+  });
+
   // 申请池操作:只是把「招入/拒绝」转交给门面裁决(规则一律在 sim;
   // 名册已满时按钮只作展示性禁用,门面仍会最终拒绝越界指令)
   poolListEl.addEventListener('click', (event) => {
@@ -276,6 +318,7 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
     renderPool(state);
     renderRoster();
     renderSquads(state);
+    renderSchedule(state);
 
     if (newEvents.length > 0) {
       feed.push(...newEvents);
@@ -457,6 +500,19 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
     }
     card.append(head);
 
+    // 练级活动行:当前进驻的地图(或休整);数值只读自内容表,安排在「日程」页
+    const activeMap = squadLevelingMap(composition.squad);
+    const activity = el('div', `squad-activity${activeMap ? ' squad-activity-on' : ''}`);
+    if (activeMap !== undefined) {
+      activity.append(el('span', 'squad-activity-text', `练级中:${activeMap.name}(${activeMap.tier}区)`));
+      activity.append(
+        el('span', 'squad-activity-sub', `经验 ${activeMap.xpPerDay}/日 · 疲劳 +${activeMap.fatiguePerDay}/日 · 阵亡率 ${Math.round(activeMap.deathChancePerDay * 100)}%`),
+      );
+    } else {
+      activity.append(el('span', 'squad-activity-text squad-activity-idle', '待命休整 · 疲劳自然恢复'));
+    }
+    card.append(activity);
+
     // 职能结构:计数 + 缺口实时标示(验收标准 1)
     const roles = el('div', 'squad-roles');
     roles.append(el('span', 'role-count', `坦克 ${composition.roleCounts['坦克']}`));
@@ -520,6 +576,87 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
     }
     card.append(list);
     return card;
+  }
+
+  /** 日程页渲染:练级地图一览(两档风险表述)+ 小队分配(规则一律在 sim)。 */
+  function renderSchedule(state: GameState): void {
+    levelingAvgEl.textContent = `公会平均等级 ${guildAverageLevel(state.members)}`;
+
+    // 地图卡:收益/损耗差异明确标示,未解锁地图给出门槛(数值只读自内容表)
+    const statuses = levelingMapStatuses(state.members);
+    mapListEl.replaceChildren(
+      ...statuses.map(({ def, unlocked }) => {
+        const card = el('li', `map-card${unlocked ? '' : ' map-locked'}`);
+        const head = el('div', 'map-head');
+        head.append(el('span', 'map-name', def.name));
+        head.append(
+          el('span', `map-tier map-tier-${def.tier === '高效' ? 'intensive' : 'relaxed'}`, `${def.tier}区`),
+        );
+        card.append(head);
+        card.append(el('p', 'map-desc', def.description));
+        card.append(
+          el(
+            'div',
+            'map-stats',
+            `经验 ${def.xpPerDay}/日 · 疲劳 +${def.fatiguePerDay}/日 · 阵亡率 ${Math.round(def.deathChancePerDay * 100)}%`,
+          ),
+        );
+        if (!unlocked) {
+          card.append(el('div', 'map-lock', `未解锁 —— 需公会平均等级 ${def.unlockAverageLevel}(当前 ${guildAverageLevel(state.members)})`));
+        }
+        return card;
+      }),
+    );
+
+    // 小队分配行:选择已解锁地图进驻,或停止练级回城休整
+    if (state.squads.length === 0) {
+      assignListEl.replaceChildren(
+        el('li', 'empty-hint', '还没有小队 —— 一切活动的出勤以小队为原子,先去「编成」页建队。'),
+      );
+      return;
+    }
+    const unlocked = statuses.filter((status) => status.unlocked);
+    assignListEl.replaceChildren(
+      ...state.squads.map((squad, index) => {
+        const current = squadLevelingMap(squad);
+        const row = el('li', 'assign-row');
+        row.dataset.squadId = String(squad.id);
+
+        const info = el('div', 'assign-info');
+        info.append(el('span', 'assign-name', `第 ${index + 1} 小队(${squad.memberIds.length}/${COMP.squadSize})`));
+        info.append(
+          el(
+            'span',
+            `assign-status${current !== undefined ? ' assign-status-active' : ''}`,
+            current !== undefined ? `练级中:${current.name}(${current.tier}区)` : '休整中 · 疲劳自然恢复',
+          ),
+        );
+        row.append(info);
+
+        if (unlocked.length > 0) {
+          const select = el('select', 'assign-select') as HTMLSelectElement;
+          for (const { def } of unlocked) {
+            const option = el('option', undefined, `${def.name}(${def.tier}区)`) as HTMLOptionElement;
+            option.value = def.id;
+            if (current?.id === def.id) {
+              option.selected = true;
+            }
+            select.append(option);
+          }
+          const go = el('button', 'pool-btn pool-btn-recruit', '前往练级');
+          go.type = 'button';
+          go.dataset.action = 'assign-leveling';
+          row.append(select, go);
+        }
+        if (current !== undefined) {
+          const stop = el('button', 'pool-btn pool-btn-reject', '停止练级');
+          stop.type = 'button';
+          stop.dataset.action = 'stop-leveling';
+          row.append(stop);
+        }
+        return row;
+      }),
+    );
   }
 
   /** 待命团员行:选择目标小队并编入(满员禁用是展示行为,裁决在门面)。 */
@@ -590,7 +727,12 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
         if (member.isChairman) {
           nameWrap.append(el('span', 'chairman-badge', '会长'));
         }
-        const summary = el('span', 'row-summary', `Lv${member.level} · 装等${averageItemLevel(member)}`);
+        // 经验进度摘要:练级成长在名册列表即可观察(比例为纯展示换算)
+        const xpPercent =
+          member.level >= LEVELING.maxLevel
+            ? '满'
+            : `${Math.floor((member.experience / xpToNextLevel(member.level)) * 100)}%`;
+        const summary = el('span', 'row-summary', `Lv${member.level} · 经验${xpPercent} · 装等${averageItemLevel(member)}`);
         top.append(nameWrap, summary);
 
         const bottom = el('div', 'row-bottom');
@@ -655,6 +797,14 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
       el('div', 'stat stat-accent', `装等 ${averageItemLevel(member)}`),
     );
     frag.append(stats);
+
+    // 经验进度:升级所需经验读自 sim 派生公式(纯展示,不做规则)
+    if (member.level >= LEVELING.maxLevel) {
+      const maxed = el('div', 'detail-block detail-maxed', `已达等级上限(${LEVELING.maxLevel} 级),经验封顶。`);
+      frag.append(maxed);
+    } else {
+      frag.append(xpBar('经验', member.experience, xpToNextLevel(member.level)));
+    }
 
     frag.append(el('h4', 'detail-section', '三维状态'));
     const vitals = el('div', 'detail-vitals');
@@ -726,6 +876,18 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
     fill.style.width = `${clampPercent(value)}%`;
     track.append(fill);
     row.append(track, el('span', 'vital-value', `${value}%`));
+    return row;
+  }
+
+  /** 经验进度条:当前经验 / 升级所需经验(比例是纯展示换算)。 */
+  function xpBar(label: string, value: number, required: number): HTMLElement {
+    const row = el('div', 'vital-row');
+    row.append(el('span', 'vital-label', label));
+    const track = el('div', 'vital-track');
+    const fill = el('div', 'vital-fill');
+    fill.style.width = `${clampPercent(Math.floor((value / required) * 100))}%`;
+    track.append(fill);
+    row.append(track, el('span', 'vital-value vital-value-wide', `${value}/${required}`));
     return row;
   }
 

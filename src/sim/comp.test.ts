@@ -23,6 +23,7 @@ function synthMember(id: number, classId: string, specId: string): Member {
     classId,
     specId,
     level: 60,
+    experience: 0,
     gear: [],
     mood: 80,
     loyalty: 80,

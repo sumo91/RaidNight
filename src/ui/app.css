@@ -969,3 +969,211 @@ body {
   flex: none;
   padding: 4px 12px;
 }
+
+/* ===== 日程:练级安排(地图分配 + 自动成长)===== */
+
+.leveling-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.leveling-head .section-title {
+  margin: 0;
+  color: var(--accent);
+}
+
+.leveling-avg {
+  font-size: 12.5px;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
+.leveling-note {
+  margin: 0 0 12px;
+  font-size: 12.5px;
+  color: var(--muted);
+  line-height: 1.7;
+}
+
+.map-list {
+  list-style: none;
+  margin: 0 0 16px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.map-card {
+  padding: 10px 12px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.map-locked {
+  opacity: 0.62;
+}
+
+.map-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.map-name {
+  font-size: 14.5px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.map-tier {
+  flex: none;
+  font-size: 11.5px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-weight: 600;
+}
+
+/* 两档风险配色:高效区 = 高经验高损耗(暖红),休闲区 = 低损耗(青绿) */
+.map-tier-intensive {
+  color: #ff9d7a;
+  background: #3a2018;
+  border: 1px solid #6b3b30;
+}
+
+.map-tier-relaxed {
+  color: #7fd6a0;
+  background: #16281e;
+  border: 1px solid #2f6b46;
+}
+
+.map-desc {
+  margin: 6px 0 4px;
+  font-size: 12.5px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.map-stats {
+  font-size: 12px;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
+.map-lock {
+  margin-top: 6px;
+  font-size: 12px;
+  color: #d99a6c;
+}
+
+.assign-head {
+  margin-top: 4px;
+}
+
+.assign-head .section-title {
+  color: var(--accent);
+}
+
+.assign-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.assign-list .empty-hint {
+  margin: 8px 0;
+}
+
+.assign-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.assign-info {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.assign-name {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.assign-status {
+  font-size: 11.5px;
+  color: #7f7396;
+}
+
+.assign-status-active {
+  color: var(--accent);
+}
+
+.assign-select {
+  flex: none;
+  max-width: 150px;
+  background: #2a2140;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 3px 6px;
+  font-size: 12px;
+}
+
+.assign-row .pool-btn {
+  flex: none;
+  padding: 4px 12px;
+}
+
+/* 编成卡:练级活动行 */
+.squad-activity {
+  margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.squad-activity-text {
+  color: #cdbcf5;
+  font-weight: 600;
+}
+
+.squad-activity-idle {
+  color: #6b6180;
+  font-weight: 400;
+}
+
+.squad-activity-sub {
+  color: #7f7396;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 经验进度值(如「620/1400」)比百分比宽,放开固定宽度 */
+.vital-value-wide {
+  width: auto;
+  min-width: 36px;
+}
+
+.detail-maxed {
+  color: var(--accent);
+}
