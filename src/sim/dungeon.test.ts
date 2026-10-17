@@ -601,10 +601,11 @@ describe('逐日结算:结果卡 + 短日志(验收标准 4 与验收标准 5)',
 });
 
 describe('内容表就位(数据驱动)', () => {
-  it('首个 5 人本为普通档,数值配置完整', () => {
-    expect(DUNGEONS).toHaveLength(1);
+  it('表首为普通档「回声墓道」,数值配置完整;首批内容覆盖四档(阶梯结构见 ladder.test.ts)', () => {
+    expect(DUNGEONS[0]?.id).toBe('echo-catacomb');
     expect(DUNGEON.tier).toBe('普通');
-    expect(DUNGEON.unlockAverageLevel).toBe(10);
+    expect(DUNGEON.unlock.averageLevel).toBe(10);
+    expect(DUNGEON.unlock.averageItemLevel).toBeGreaterThanOrEqual(0);
     expect(DUNGEON.runsPerDay).toBeGreaterThan(0);
     expect(DUNGEON.dropsPerRun).toBeGreaterThan(0);
     expect(DUNGEON.dropItemLevel).toBeGreaterThan(0);

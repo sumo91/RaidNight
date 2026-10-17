@@ -11,7 +11,7 @@ import type { SimEvent } from '../sim/events';
 import { squadCompositions, teamCheck, unassignedMembers } from '../sim/comp';
 import { dungeonStatuses, squadDungeon, squadDungeonReadiness } from '../sim/dungeon';
 import { levelingMapStatuses, squadLevelingMap, xpToNextLevel } from '../sim/leveling';
-import { averageItemLevel, guildAverageLevel } from '../sim/roster';
+import { averageItemLevel, guildAverageItemLevel, guildAverageLevel } from '../sim/roster';
 import type { DungeonRunReport, GameState, Member } from '../sim/state';
 import { formatGameClock, formatGameStamp } from './format';
 
@@ -697,10 +697,12 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
 
   /** 日程页渲染:结果卡 + 练级地图一览 + 小队分配 + 5 人本一览与下本分配(规则一律在 sim)。 */
   function renderSchedule(state: GameState): void {
-    levelingAvgEl.textContent = `公会平均等级 ${guildAverageLevel(state.members)}`;
+    const averageLevel = guildAverageLevel(state.members);
+    const averageItemLevel = guildAverageItemLevel(state.members);
+    levelingAvgEl.textContent = `公会平均等级 ${averageLevel} · 平均装等 ${averageItemLevel}`;
     renderDungeonReport(state.lastDungeonRun);
 
-    // 地图卡:收益/损耗差异明确标示,未解锁地图给出门槛(数值只读自内容表)
+    // 地图卡:等级带与收益/损耗差异明确标示,未解锁地图给出带下限门槛(数值只读自内容表)
     const statuses = levelingMapStatuses(state.members);
     mapListEl.replaceChildren(
       ...statuses.map(({ def, unlocked }) => {
@@ -710,6 +712,7 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
         head.append(
           el('span', `map-tier map-tier-${def.tier === '高效' ? 'intensive' : 'relaxed'}`, `${def.tier}区`),
         );
+        head.append(el('span', 'map-band', `Lv${def.levelBand.min}–${def.levelBand.max}`));
         card.append(head);
         card.append(el('p', 'map-desc', def.description));
         card.append(
@@ -720,7 +723,9 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
           ),
         );
         if (!unlocked) {
-          card.append(el('div', 'map-lock', `未解锁 —— 需公会平均等级 ${def.unlockAverageLevel}(当前 ${guildAverageLevel(state.members)})`));
+          card.append(
+            el('div', 'map-lock', `未解锁 —— 需公会平均等级 ${def.levelBand.min}(当前 ${averageLevel})`),
+          );
         }
         return card;
       }),
@@ -776,14 +781,17 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
       );
     }
 
-    // 5 人本一览:难度/掉落档位标示,未解锁给出门槛(数值只读自内容表)
+    // 5 人本一览:难度档与门槛标示,未解锁给出未达标项(判定与文案在 sim,此处只渲染)
     const dungeonStates = dungeonStatuses(state.members);
     dungeonListEl.replaceChildren(
-      ...dungeonStates.map(({ def, unlocked }) => {
+      ...dungeonStates.map(({ def, unlocked, unmet }) => {
         const card = el('li', `map-card dungeon-card${unlocked ? '' : ' map-locked'}`);
         const head = el('div', 'map-head');
         head.append(el('span', 'map-name', def.name));
         head.append(el('span', 'map-tier map-tier-dungeon', `${def.tier}档`));
+        head.append(
+          el('span', 'map-band', `门槛 Lv≥${def.unlock.averageLevel} · 装等≥${def.unlock.averageItemLevel}`),
+        );
         card.append(head);
         card.append(el('p', 'map-desc', def.description));
         card.append(
@@ -798,7 +806,7 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
             el(
               'div',
               'map-lock',
-              `未解锁 —— 需公会平均等级 ${def.unlockAverageLevel}(当前 ${guildAverageLevel(state.members)})`,
+              `未解锁 —— 需${unmet.join('、')}(当前 等级 ${averageLevel} · 装等 ${averageItemLevel})`,
             ),
           );
         }

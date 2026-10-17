@@ -21,16 +21,16 @@ export function xpEfficiency(fatigue: number): number {
   return Math.max(LEVELING.minEfficiency, 1 - fatigue * LEVELING.efficiencyLossPerFatigue);
 }
 
-/** 地图解锁状态:按内容表顺序,标注当前是否可选(解锁门槛 = 公会平均等级)。 */
+/** 地图解锁状态:按内容表顺序,标注当前是否可选(解锁门槛 = 等级带下限,即公会平均等级)。 */
 export interface LevelingMapStatus {
   readonly def: LevelingMapDef;
   readonly unlocked: boolean;
 }
 
-/** 全部练级地图的解锁状态(派生量:随名册平均等级即时变化)。 */
+/** 全部练级地图的解锁状态(派生量:随名册平均等级即时变化;等级带见 content/maps)。 */
 export function levelingMapStatuses(members: readonly Member[]): readonly LevelingMapStatus[] {
   const average = guildAverageLevel(members);
-  return LEVELING_MAPS.map((def) => ({ def, unlocked: average >= def.unlockAverageLevel }));
+  return LEVELING_MAPS.map((def) => ({ def, unlocked: average >= def.levelBand.min }));
 }
 
 /** 小队当前的练级地图(活动缺失或地图不在内容表时为 undefined = 休整)。 */

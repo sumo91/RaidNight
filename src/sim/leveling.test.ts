@@ -96,12 +96,12 @@ function setupLevelingSquad(seed: number): SimulationFacade {
 
 describe('地图内容表:两档风险(验收标准 1 的数据面)', () => {
   it('同阶段两档成对解锁,高效区经验更多、疲劳与阵亡损耗更重', () => {
-    // 按解锁门槛分阶段;每阶段恰有高效/休闲各一张
+    // 按等级带下限(解锁门槛)分阶段;每阶段恰有高效/休闲各一张
     const byUnlock = new Map<number, LevelingMapDef[]>();
     for (const def of LEVELING_MAPS) {
-      const stage = byUnlock.get(def.unlockAverageLevel) ?? [];
+      const stage = byUnlock.get(def.levelBand.min) ?? [];
       stage.push(def);
-      byUnlock.set(def.unlockAverageLevel, stage);
+      byUnlock.set(def.levelBand.min, stage);
     }
     expect(byUnlock.size).toBeGreaterThanOrEqual(3); // 首批 3 阶段
     for (const stage of byUnlock.values()) {
@@ -115,8 +115,8 @@ describe('地图内容表:两档风险(验收标准 1 的数据面)', () => {
     }
   });
 
-  it('地图按解锁门槛升序排列,id 唯一;经验曲线随等级单调上升', () => {
-    const unlocks = LEVELING_MAPS.map((m) => m.unlockAverageLevel);
+  it('地图按等级带下限升序排列,id 唯一;经验曲线随等级单调上升', () => {
+    const unlocks = LEVELING_MAPS.map((m) => m.levelBand.min);
     expect([...unlocks].sort((a, b) => a - b)).toEqual(unlocks);
     expect(new Set(LEVELING_MAPS.map((m) => m.id)).size).toBe(LEVELING_MAPS.length);
     for (const def of LEVELING_MAPS) {
@@ -144,7 +144,7 @@ describe('公会平均等级与地图解锁(验收标准 1)', () => {
       ['quarry-camp', 'windmill-plains'],
     );
     for (const status of statuses) {
-      expect(status.unlocked).toBe(guildAverageLevel(state.members) >= status.def.unlockAverageLevel);
+      expect(status.unlocked).toBe(guildAverageLevel(state.members) >= status.def.levelBand.min);
     }
     expect(guildAverageLevel(state.members)).toBeGreaterThanOrEqual(8); // 建会均值约 9-11
   });

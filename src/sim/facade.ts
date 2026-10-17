@@ -6,7 +6,8 @@ import type { GuildCommand } from './commands';
 import { GAME_MINUTES_PER_DAY, GAME_MINUTES_PER_WEEK, gameDay, gameWeek } from './clock';
 import { settleDungeonDay, squadDungeon, squadDungeonReadiness } from './dungeon';
 import type { SimEvent, SimEventKind } from './events';
-import { guildAverageLevel } from './roster';
+import { evaluateUnlockGates } from './ladder';
+import { guildAverageItemLevel, guildAverageLevel } from './roster';
 import { settleLevelingDay, squadLevelingMap } from './leveling';
 import { generateApplicantPool } from './recruit';
 import { pickOne } from './rng';
@@ -183,9 +184,9 @@ function applyCommand(state: GameState, command: GuildCommand, collector: EventC
       if (map === undefined) {
         return state; // 地图不在内容表:忽略
       }
-      // 解锁校验只发生在安排时刻:公会平均等级达到门槛才可进驻
+      // 解锁校验只发生在安排时刻:公会平均等级达到等级带下限才可进驻
       // (安排之后平均等级回落不打断进行中的练级)
-      if (guildAverageLevel(state.members) < map.unlockAverageLevel) {
+      if (guildAverageLevel(state.members) < map.levelBand.min) {
         return state; // 未解锁:忽略
       }
       const current = squadLevelingMap(state.squads[index]!);
@@ -225,9 +226,14 @@ function applyCommand(state: GameState, command: GuildCommand, collector: EventC
       if (dungeon === undefined) {
         return state; // 副本不在内容表:忽略
       }
-      // 解锁校验只发生在安排时刻(与练级地图同一规则)
-      if (guildAverageLevel(state.members) < dungeon.unlockAverageLevel) {
-        return state; // 未解锁:忽略
+      // 解锁校验只发生在安排时刻(与练级地图同一规则):门槛双维
+      // (公会平均等级 + 公会平均装等)任一未达标即拒绝,判定在 sim/ladder.ts
+      const unlock = evaluateUnlockGates(dungeon.unlock, {
+        averageLevel: guildAverageLevel(state.members),
+        averageItemLevel: guildAverageItemLevel(state.members),
+      });
+      if (!unlock.unlocked) {
+        return state; // 未达标:忽略
       }
       // 进本门槛:满职能小队(满员 5 人 + 至少 1 坦 1 奶)才可进驻
       const readiness = squadDungeonReadiness(state.squads[index]!, state.members);

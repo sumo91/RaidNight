@@ -1108,6 +1108,15 @@ body {
   line-height: 1.6;
 }
 
+/* 等级带/门槛徽标:内容阶梯的刻度(带下限 = 解锁门槛) */
+.map-band {
+  flex: none;
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 .map-stats {
   font-size: 12px;
   color: var(--accent);

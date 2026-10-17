@@ -22,3 +22,12 @@ export function guildAverageLevel(members: readonly MemberProfile[]): number {
   const total = members.reduce((sum, member) => sum + member.level, 0);
   return Math.floor(total / members.length);
 }
+
+/** 公会平均装等:名册全员装等均值的向下取整;空名册为 0。5 人本难度档的解锁刻度之一。 */
+export function guildAverageItemLevel(members: readonly MemberProfile[]): number {
+  if (members.length === 0) {
+    return 0;
+  }
+  const total = members.reduce((sum, member) => sum + averageItemLevel(member), 0);
+  return Math.floor(total / members.length);
+}

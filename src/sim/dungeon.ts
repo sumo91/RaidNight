@@ -11,8 +11,8 @@
 import {
   DUNGEONS,
   DUNGEON_BY_ID,
-  DUNGEON_DROP_QUALITY,
   DUNGEON_SETTLEMENT,
+  DUNGEON_TIER_BY_ID,
   type DungeonDef,
 } from '../content/dungeons';
 import { GEAR_SLOTS, QUALITY_RULES, type GearSlot, type Quality } from '../content/gear';
@@ -20,20 +20,29 @@ import { LEVELING } from '../content/maps';
 import { COMP } from '../content/comp';
 import { composeSquad, memberRole } from './comp';
 import { assessEncounter, rollEncounterOutcome } from './encounter';
-import { averageItemLevel, guildAverageLevel } from './roster';
+import { evaluateUnlockGates } from './ladder';
+import { averageItemLevel, guildAverageItemLevel, guildAverageLevel } from './roster';
 import { nextInt, pickOne, pickWeighted } from './rng';
 import type { DropOutcome, DungeonRunReport, Member, Squad } from './state';
 
-/** 5 人本解锁状态:按内容表顺序,标注当前是否可选(解锁门槛 = 公会平均等级)。 */
+/** 5 人本解锁状态:按内容表顺序,标注当前是否可选与未达标门槛(内容阶梯引擎)。 */
 export interface DungeonStatus {
   readonly def: DungeonDef;
   readonly unlocked: boolean;
+  /** 未达标门槛描述(空数组 = 已解锁;UI 锁定文案与测试断言共用)。 */
+  readonly unmet: readonly string[];
 }
 
-/** 全部 5 人本的解锁状态(派生量:随名册平均等级即时变化)。 */
+/**
+ * 全部 5 人本的解锁状态(派生量:随公会平均等级与平均装等即时变化)。
+ * 门槛 = 公会平均等级 + 公会平均装等,双维任一未达标即锁定(判定在 sim/ladder.ts)。
+ */
 export function dungeonStatuses(members: readonly Member[]): readonly DungeonStatus[] {
-  const average = guildAverageLevel(members);
-  return DUNGEONS.map((def) => ({ def, unlocked: average >= def.unlockAverageLevel }));
+  const metrics = { averageLevel: guildAverageLevel(members), averageItemLevel: guildAverageItemLevel(members) };
+  return DUNGEONS.map((def) => {
+    const evaluation = evaluateUnlockGates(def.unlock, metrics);
+    return { def, unlocked: evaluation.unlocked, unmet: evaluation.unmet };
+  });
 }
 
 /** 小队当前进驻的 5 人本(活动缺失或副本不在内容表时为 undefined = 休整)。 */
@@ -85,7 +94,8 @@ export interface DroppedItem {
 
 /**
  * 掷出一次胜利的掉落(件数由副本配置):
- * 每件抽取顺序固定 = 部位(8 部位等概率)→ 品质(内容表权重)→ 装等扰动;
+ * 每件抽取顺序固定 = 部位(8 部位等概率)→ 品质(该副本难度档的权重)→ 装等扰动;
+ * 品质权重随难度档抬升(难度档差异:档越高越稀有,权重在难度档表);
  * 装等 = 副本掉落基准 + 品质加成(content/gear)± 扰动(下限 1)。
  */
 export function rollDrops(
@@ -93,11 +103,14 @@ export function rollDrops(
   def: DungeonDef,
   count: number,
 ): [items: DroppedItem[], nextState: number] {
+  // 防御:档位不在难度档表时按全白处理(内容表校验兜底,正常不会发生)
+  const qualityRules =
+    DUNGEON_TIER_BY_ID.get(def.tier)?.dropQuality ?? [{ quality: '白' as const, weight: 1 }];
   let rng = rngState;
   const items: DroppedItem[] = [];
   for (let i = 0; i < count; i++) {
     const [slot, afterSlot] = pickOne(rng, GEAR_SLOTS);
-    const [qualityRule, afterQuality] = pickWeighted(afterSlot, DUNGEON_DROP_QUALITY);
+    const [qualityRule, afterQuality] = pickWeighted(afterSlot, qualityRules);
     const bonus =
       QUALITY_RULES.find((rule) => rule.quality === qualityRule.quality)?.itemLevelBonus ?? 0;
     const [jitter, afterJitter] = nextInt(
