@@ -50,6 +50,15 @@ export interface Applicant {
   readonly profile: MemberProfile;
 }
 
+/**
+ * 小队:5 人制的基本编组单位(GLOSSARY);一切活动的出勤以小队为原子。
+ * 队内只存团员 id(顺序即编入顺序);职能结构与光环是派生量(sim/comp.ts)。
+ */
+export interface Squad {
+  readonly id: number;
+  readonly memberIds: readonly number[];
+}
+
 /** 单件装备:部位 + 品质 + 装等(物品表见后续装备工单)。 */
 export interface GearItem {
   readonly slot: GearSlot;
@@ -91,6 +100,10 @@ export interface GameState {
   readonly members: readonly Member[];
   /** 下一个团员 id(生成与招募共用) */
   readonly nextMemberId: number;
+  /** 编成:小队列表(建会时为空;最多 maxSquads 支,见 content/comp) */
+  readonly squads: readonly Squad[];
+  /** 下一个小队 id */
+  readonly nextSquadId: number;
   /** 申请池:每游戏日刷新(含建会当日的初始池) */
   readonly applicants: readonly Applicant[];
   /** 下一个申请编号 */
@@ -121,6 +134,8 @@ export function createInitialState(seed: number, guildName?: string): GameState 
     rosterCap: RECRUIT.baseRosterCap,
     members: roster.members,
     nextMemberId: roster.nextMemberId,
+    squads: [],
+    nextSquadId: 1,
     applicants: pool.applicants,
     nextApplicationId: pool.nextApplicationId,
     nextEventSeq: 1,

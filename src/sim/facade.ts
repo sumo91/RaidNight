@@ -1,10 +1,11 @@
 import { DAILY_FLAVOR_POOL } from '../content/daily-flavor';
+import { COMP } from '../content/comp';
 import type { GuildCommand } from './commands';
 import { GAME_MINUTES_PER_DAY, GAME_MINUTES_PER_WEEK, gameDay, gameWeek } from './clock';
 import type { SimEvent, SimEventKind } from './events';
 import { generateApplicantPool } from './recruit';
 import { pickOne } from './rng';
-import { createInitialState, normalizeGuildName, type GameState, type Member } from './state';
+import { createInitialState, normalizeGuildName, type GameState, type Member, type Squad } from './state';
 
 /**
  * 模拟门面 —— 全项目唯一测试接缝。
@@ -112,9 +113,69 @@ function applyCommand(state: GameState, command: GuildCommand, collector: EventC
       return {
         ...state,
         members: state.members.filter((m) => m.id !== command.memberId),
+        // 淘汰同时清编:人走队清,小队不悬挂已离会团员
+        squads: removeFromSquads(state.squads, command.memberId),
       };
     }
+    case 'createSquad': {
+      if (state.squads.length >= COMP.maxSquads) {
+        return state; // 小队数已达上限(团队 = 8 小队):忽略
+      }
+      const ordinal = state.squads.length + 1;
+      collector.push(state.clockGameMinutes, '编成', `第 ${ordinal} 小队成立。`);
+      return {
+        ...state,
+        squads: [...state.squads, { id: state.nextSquadId, memberIds: [] }],
+        nextSquadId: state.nextSquadId + 1,
+      };
+    }
+    case 'disbandSquad': {
+      const index = state.squads.findIndex((squad) => squad.id === command.squadId);
+      if (index === -1 || state.squads[index]!.memberIds.length > 0) {
+        return state; // 小队不存在或仍有队员:忽略(只解散空小队)
+      }
+      collector.push(state.clockGameMinutes, '编成', `第 ${index + 1} 小队解散。`);
+      return { ...state, squads: state.squads.filter((squad) => squad.id !== command.squadId) };
+    }
+    case 'assignToSquad': {
+      const member = state.members.find((m) => m.id === command.memberId);
+      const index = state.squads.findIndex((squad) => squad.id === command.squadId);
+      if (member === undefined || index === -1) {
+        return state; // 团员或小队不存在:忽略
+      }
+      if (state.squads[index]!.memberIds.includes(member.id)) {
+        return state; // 已在该小队:无变化、无事件
+      }
+      // 一名团员同一时刻只在一支小队:先从原队调离再编入
+      const vacancies = removeFromSquads(state.squads, member.id);
+      if (vacancies[index]!.memberIds.length >= COMP.squadSize) {
+        return state; // 目标小队已满(5 人制):拒绝
+      }
+      const squads = vacancies.map((squad, i) =>
+        i === index ? { ...squad, memberIds: [...squad.memberIds, member.id] } : squad,
+      );
+      collector.push(state.clockGameMinutes, '编成', `「${member.name}」编入第 ${index + 1} 小队。`);
+      return { ...state, squads };
+    }
+    case 'removeFromSquad': {
+      const member = state.members.find((m) => m.id === command.memberId);
+      const index = state.squads.findIndex((squad) => squad.memberIds.includes(command.memberId));
+      if (member === undefined || index === -1) {
+        return state; // 团员不在任何小队(或已离会):忽略
+      }
+      collector.push(state.clockGameMinutes, '编成', `「${member.name}」调离第 ${index + 1} 小队。`);
+      return { ...state, squads: removeFromSquads(state.squads, member.id) };
+    }
   }
+}
+
+/** 从所有小队移除一名团员(保持小队顺序与队内顺序;返回新数组)。 */
+function removeFromSquads(squads: readonly Squad[], memberId: number): readonly Squad[] {
+  return squads.map((squad) =>
+    squad.memberIds.includes(memberId)
+      ? { ...squad, memberIds: squad.memberIds.filter((id) => id !== memberId) }
+      : squad,
+  );
 }
 
 function advanceClock(state: GameState, delta: number, collector: EventCollector): GameState {
@@ -160,8 +221,13 @@ function advanceClock(state: GameState, delta: number, collector: EventCollector
 export class SimulationFacade {
   private _state: GameState;
 
-  constructor(seed: number, guildName?: string) {
-    this._state = createInitialState(seed, guildName);
+  /**
+   * @param seed 本局种子(建会名册与申请池生成)
+   * @param guildName 公会名(缺省用默认名)
+   * @param resumeState 从版本化存档恢复的状态(ADR-0003);给出时忽略 seed 与公会名
+   */
+  constructor(seed: number, guildName?: string, resumeState?: GameState) {
+    this._state = resumeState ?? createInitialState(seed, guildName);
   }
 
   get state(): GameState {

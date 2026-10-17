@@ -11,7 +11,9 @@ export type SimEventKind =
   /** 公会:会长指令造成的状态变化 */
   | '公会'
   /** 招募:申请池刷新与招入/拒绝/淘汰(申请池见 GLOSSARY) */
-  | '招募';
+  | '招募'
+  /** 编成:小队成立/解散与团员调入/调离(编成见 GLOSSARY) */
+  | '编成';
 
 export interface SimEvent {
   /** 全局递增序号(从 1 起) */

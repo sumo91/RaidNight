@@ -598,3 +598,374 @@ body {
 .q-purple {
   color: #b367f1;
 }
+
+/* ===== 编成(小队 / 职能 / 光环 / 团队检查)===== */
+
+.team-check {
+  margin-bottom: 12px;
+}
+
+.team-check-card {
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.team-check-pass {
+  border-color: #2f6b46;
+  background: #14211a;
+}
+
+.team-check-fail {
+  border-color: #6b3b30;
+  background: #221416;
+}
+
+.team-check-head {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.team-check-title {
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.team-check-pass .team-check-title {
+  color: #63c98a;
+}
+
+.team-check-fail .team-check-title {
+  color: #e08a5f;
+}
+
+.team-check-sub {
+  font-size: 11.5px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.team-check-ok {
+  margin: 6px 0 0;
+  font-size: 12.5px;
+  color: #63c98a;
+}
+
+.team-check-failures {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.team-check-failures .failure {
+  font-size: 12.5px;
+  color: #d99a6c;
+}
+
+.team-check-failures .failure::before {
+  content: '·';
+  margin-right: 6px;
+  color: #6b3b30;
+}
+
+.squad-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.squad-create {
+  padding: 5px 16px;
+  font-size: 13px;
+  border-radius: 6px;
+  cursor: pointer;
+  border: 1px solid #6b5320;
+  background: #3d2f10;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.squad-create:hover:not(:disabled) {
+  background: #4d3c15;
+}
+
+.squad-create:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.squad-cap {
+  font-size: 11.5px;
+  color: #7f7396;
+  font-variant-numeric: tabular-nums;
+}
+
+.squad-list {
+  list-style: none;
+  margin: 0 0 16px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.squad-card {
+  padding: 10px 12px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.squad-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.squad-title {
+  font-size: 14.5px;
+  font-weight: 700;
+  color: var(--accent);
+  letter-spacing: 0.04em;
+}
+
+.squad-size {
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.squad-disband {
+  margin-left: auto;
+  background: none;
+  border: 1px solid #5a3030;
+  color: #d98d7a;
+  font-size: 11.5px;
+  padding: 2px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.squad-disband:hover {
+  background: #3a2222;
+}
+
+.squad-roles {
+  margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.role-count {
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: #171221;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.gap-badge {
+  font-size: 11.5px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-weight: 600;
+}
+
+.gap-role {
+  color: #ffb163;
+  background: #3a2517;
+  border: 1px solid #6b4527;
+}
+
+.gap-fill {
+  color: #9a8fb0;
+  background: #1c1728;
+  border: 1px dashed var(--line);
+}
+
+.gap-ok {
+  font-size: 11.5px;
+  color: #63c98a;
+}
+
+.squad-auras {
+  margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.aura-chip {
+  font-size: 11.5px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid #4a3a68;
+  background: #241b3a;
+  color: #cdbcf5;
+  cursor: help;
+}
+
+.aura-preview {
+  margin-top: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.aura-preview-label {
+  color: #7f7396;
+  letter-spacing: 0.08em;
+}
+
+.aura-stat {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.aura-stat-zero {
+  color: #6b6180;
+  font-weight: 400;
+}
+
+.aura-empty {
+  margin-top: 8px;
+  font-size: 12px;
+  color: #6b6180;
+  line-height: 1.6;
+}
+
+.squad-members {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.squad-member {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  background: #171221;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.squad-member-info {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex: 1;
+}
+
+.squad-member-info .member-name {
+  font-size: 13.5px;
+  flex: none;
+}
+
+.squad-member-class {
+  font-size: 11.5px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.squad-remove {
+  flex: none;
+  background: #2b1a1a;
+  border: 1px solid #5a3030;
+  color: #d98d7a;
+  font-size: 11.5px;
+  padding: 3px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.squad-remove:hover {
+  background: #3a2222;
+}
+
+.bench-panel {
+  padding: 10px 12px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.bench-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.bench-list .empty-hint {
+  margin: 4px 0;
+}
+
+.bench-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  background: #171221;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.bench-info {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex: 1;
+}
+
+.bench-info .member-name {
+  font-size: 13.5px;
+  flex: none;
+}
+
+.bench-class {
+  font-size: 11.5px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bench-select {
+  flex: none;
+  max-width: 128px;
+  background: #2a2140;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 3px 6px;
+  font-size: 12px;
+}
+
+.bench-row .pool-btn {
+  flex: none;
+  padding: 4px 12px;
+}

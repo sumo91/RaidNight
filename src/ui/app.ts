@@ -1,4 +1,5 @@
 import { ATTENDANCE_BY_ID } from '../content/attendance';
+import { COMP } from '../content/comp';
 import { CLASS_BY_ID } from '../content/classes';
 import type { Quality } from '../content/gear';
 import { SKILL_TIER_BY_ID } from '../content/skill-tiers';
@@ -6,6 +7,7 @@ import { TRAIT_BY_ID } from '../content/traits';
 import { GAME_MINUTES_PER_DAY, GAME_MINUTES_PER_WEEK } from '../sim/clock';
 import type { SimInput } from '../sim/facade';
 import type { SimEvent } from '../sim/events';
+import { squadCompositions, teamCheck, unassignedMembers } from '../sim/comp';
 import { averageItemLevel } from '../sim/roster';
 import type { GameState, Member } from '../sim/state';
 import { formatGameClock, formatGameStamp } from './format';
@@ -24,6 +26,8 @@ export interface AppHandle {
 export interface MountOptions {
   /** 把门面输入(指令/时间增量)交给装配层转发给门面。 */
   dispatch: (input: SimInput) => void;
+  /** 清空本地存档并重开(装配层拥有持久化;UI 不关心存储介质)。 */
+  wipeSave?: () => void;
 }
 
 /** 五页签(DESIGN.md:名册/编成/日程/世界/金库·荣誉);名册是首页(ADR-0006 组建之乐)。 */
@@ -74,7 +78,19 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
         <div class="member-detail" data-ref="member-detail" hidden></div>
       </section>
       <section class="pane" data-pane="squads" hidden>
-        <p class="empty-hint">「编成」页签在后续工单开放。</p>
+        <div class="team-check" data-ref="team-check"></div>
+        <div class="squad-toolbar">
+          <button type="button" class="squad-create" data-action="create-squad">新建小队</button>
+          <span class="squad-cap" data-ref="squad-cap"></span>
+        </div>
+        <ul class="squad-list" data-ref="squad-list"></ul>
+        <div class="bench-panel">
+          <div class="pool-head">
+            <h2 class="section-title">待命团员</h2>
+            <span class="pool-sub" data-ref="bench-sub"></span>
+          </div>
+          <ul class="bench-list" data-ref="bench-list"></ul>
+        </div>
       </section>
       <section class="pane" data-pane="schedule" hidden>
         <p class="empty-hint">「日程」页签在后续工单开放。</p>
@@ -97,6 +113,7 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
       <button type="button" data-dev="day">+1 游戏日</button>
       <button type="button" data-dev="week">+1 游戏周</button>
       <button type="button" data-dev="rename">公会改名</button>
+      <button type="button" data-dev="wipe">清档重开</button>
     </div>
     <nav class="tab-bar">
       ${TABS.map((tab) => `<button type="button" data-tab="${tab.id}"${tab.id === 'roster' ? ' class="active"' : ''}>${tab.label}</button>`).join('\n')}
@@ -113,6 +130,11 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
   const poolSubEl = requireElement<HTMLSpanElement>(root, 'pool-sub');
   const poolFullHintEl = requireElement<HTMLParagraphElement>(root, 'pool-full-hint');
   const poolListEl = requireElement<HTMLUListElement>(root, 'pool-list');
+  const teamCheckEl = requireElement<HTMLDivElement>(root, 'team-check');
+  const squadCapEl = requireElement<HTMLSpanElement>(root, 'squad-cap');
+  const squadListEl = requireElement<HTMLUListElement>(root, 'squad-list');
+  const benchSubEl = requireElement<HTMLSpanElement>(root, 'bench-sub');
+  const benchListEl = requireElement<HTMLUListElement>(root, 'bench-list');
 
   // 页签切换:纯展示行为(哪个 pane 可见),不是业务规则
   let activeTab: TabId = 'roster';
@@ -138,6 +160,66 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
     const name = window.prompt('新的公会名(规则由模拟门面裁决):');
     if (name !== null) {
       options.dispatch({ command: { type: 'renameGuild', name }, deltaGameMinutes: 0 });
+    }
+  });
+  const devWipe = root.querySelector<HTMLButtonElement>('[data-dev="wipe"]');
+  devWipe?.addEventListener('click', () => {
+    if (window.confirm('清空本地存档并重新开始?此操作不可撤销。')) {
+      options.wipeSave?.();
+    }
+  });
+
+  // 编成页操作:只是把「建队/编入/调离/解散」转交给门面裁决(规则一律在 sim)
+  squadListEl.addEventListener('click', (event) => {
+    const target = event.target as HTMLElement;
+    const removeButton = target.closest<HTMLButtonElement>('[data-action="remove-member"]');
+    if (removeButton !== null && !removeButton.disabled) {
+      options.dispatch({
+        command: { type: 'removeFromSquad', memberId: Number(removeButton.dataset.memberId) },
+        deltaGameMinutes: 0,
+      });
+      return;
+    }
+    const disbandButton = target.closest<HTMLButtonElement>('[data-action="disband-squad"]');
+    if (disbandButton !== null && !disbandButton.disabled) {
+      options.dispatch({ command: { type: 'disbandSquad', squadId: Number(disbandButton.dataset.squadId) }, deltaGameMinutes: 0 });
+    }
+  });
+  root.querySelector<HTMLButtonElement>('[data-action="create-squad"]')?.addEventListener('click', (event) => {
+    const button = event.currentTarget as HTMLButtonElement;
+    if (!button.disabled) {
+      options.dispatch({ command: { type: 'createSquad' }, deltaGameMinutes: 0 });
+    }
+  });
+  // 待命团员编入:目标小队来自行内选择框;「满员禁用」只是展示,门面仍做最终裁决
+  benchListEl.addEventListener('click', (event) => {
+    const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-action="assign"]');
+    if (button === null || button.disabled) {
+      return;
+    }
+    const row = button.closest<HTMLElement>('[data-member-id]');
+    const select = row?.querySelector<HTMLSelectElement>('select');
+    if (row === undefined || row === null || select === undefined || select === null || select.value === '') {
+      return;
+    }
+    options.dispatch({
+      command: {
+        type: 'assignToSquad',
+        memberId: Number(row.dataset.memberId),
+        squadId: Number(select.value),
+      },
+      deltaGameMinutes: 0,
+    });
+  });
+  benchListEl.addEventListener('change', (event) => {
+    const select = event.target as HTMLSelectElement;
+    if (!select.matches('select')) {
+      return;
+    }
+    const row = select.closest<HTMLElement>('[data-member-id]');
+    const button = row?.querySelector<HTMLButtonElement>('[data-action="assign"]');
+    if (row != null && button != null) {
+      syncAssignEnabled(row, button);
     }
   });
 
@@ -193,6 +275,7 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
     gameClockEl.textContent = formatGameClock(state.clockGameMinutes);
     renderPool(state);
     renderRoster();
+    renderSquads(state);
 
     if (newEvents.length > 0) {
       feed.push(...newEvents);
@@ -294,6 +377,197 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
         return card;
       }),
     );
+  }
+
+  /** 编成页渲染:团队检查 + 小队卡(职能缺口/光环预览)+ 待命团员(验收标准 1–3)。 */
+  function renderSquads(state: GameState): void {
+    // 团队检查面板:通过/未通过的明确反馈(验收标准 3)
+    const check = teamCheck(state);
+    const panel = el('div', `team-check-card${check.passed ? ' team-check-pass' : ' team-check-fail'}`);
+    const head = el('div', 'team-check-head');
+    head.append(el('span', 'team-check-title', `团队检查:${check.passed ? '通过' : '未通过'}`));
+    head.append(
+      el(
+        'span',
+        'team-check-sub',
+        `小队 ${check.totals.squads}/${COMP.maxSquads} · 满员 ${check.totals.fullSquads}/${COMP.teamCheck.requiredFullSquads} · 在编 ${check.totals.assigned}/${COMP.maxSquads * COMP.squadSize} · 坦克 ${check.totals.tanks}/${COMP.teamCheck.minTanks} · 治疗 ${check.totals.healers}/${COMP.teamCheck.minHealers} · 输出 ${check.totals.dps}`,
+      ),
+    );
+    panel.append(head);
+    if (check.passed) {
+      panel.append(el('p', 'team-check-ok', '阵容齐整,随时可以开团。'));
+    } else {
+      const list = el('ul', 'team-check-failures');
+      for (const failure of check.failures) {
+        const li = el('li', `failure failure-${failure.kind}`);
+        li.textContent = failure.text;
+        list.append(li);
+      }
+      panel.append(list);
+    }
+    teamCheckEl.replaceChildren(panel);
+
+    // 工具条:新建小队(达上限时展示性禁用,门面仍做最终裁决)
+    const createButton = root.querySelector<HTMLButtonElement>('[data-action="create-squad"]');
+    const capped = state.squads.length >= COMP.maxSquads;
+    if (createButton !== null) {
+      createButton.disabled = capped;
+      createButton.title = capped ? `团队最多 ${COMP.maxSquads} 支小队` : '';
+    }
+    squadCapEl.textContent = `${state.squads.length}/${COMP.maxSquads} 支`;
+
+    // 小队卡:成员增删、职能缺口标示、光环与加成预览(验收标准 1 与 2)
+    const compositions = squadCompositions(state);
+    if (compositions.length === 0) {
+      squadListEl.replaceChildren(
+        el('li', 'empty-hint', '还没有小队 —— 一切活动的出勤以小队为原子,先建一支吧。'),
+      );
+    } else {
+      squadListEl.replaceChildren(...compositions.map(renderSquadCard));
+    }
+
+    // 待命团员:名册中不在任何小队的成员
+    const bench = unassignedMembers(state);
+    benchSubEl.textContent = `${bench.length} 人待命`;
+    if (bench.length === 0) {
+      benchListEl.replaceChildren(el('li', 'empty-hint', '名册全员都在小队中。'));
+      return;
+    }
+    if (state.squads.length === 0) {
+      benchListEl.replaceChildren(el('li', 'empty-hint', '先在上方新建小队,才能编入团员。'));
+      return;
+    }
+    benchListEl.replaceChildren(...bench.map((member) => renderBenchRow(member, state.squads)));
+  }
+
+  /** 单支小队卡:职能结构实时检查 + 光环预览。 */
+  function renderSquadCard(composition: ReturnType<typeof squadCompositions>[number]): HTMLLIElement {
+    const card = el('li', 'squad-card');
+
+    const head = el('div', 'squad-head');
+    const title = el('span', 'squad-title', `第 ${composition.ordinal} 小队`);
+    const size = el('span', 'squad-size', `${composition.members.length}/${COMP.squadSize}`);
+    head.append(title, size);
+    if (composition.members.length === 0) {
+      const disband = el('button', 'squad-disband', '解散');
+      disband.type = 'button';
+      disband.dataset.action = 'disband-squad';
+      disband.dataset.squadId = String(composition.squad.id);
+      head.append(disband);
+    }
+    card.append(head);
+
+    // 职能结构:计数 + 缺口实时标示(验收标准 1)
+    const roles = el('div', 'squad-roles');
+    roles.append(el('span', 'role-count', `坦克 ${composition.roleCounts['坦克']}`));
+    roles.append(el('span', 'role-count', `治疗 ${composition.roleCounts['治疗']}`));
+    roles.append(el('span', 'role-count', `输出 ${composition.roleCounts['输出']}`));
+    if (composition.gaps.length > 0) {
+      for (const gap of composition.gaps) {
+        const badge = el(
+          'span',
+          `gap-badge gap-${gap.kind === '满员' ? 'fill' : 'role'}`,
+          gap.kind === '满员' ? `缺 ${gap.missing} 人` : `缺${gap.kind}×${gap.missing}`,
+        );
+        roles.append(badge);
+      }
+    } else {
+      roles.append(el('span', 'gap-ok', '职能齐整'));
+    }
+    card.append(roles);
+
+    // 光环面板:每种生效光环可见(验收标准 2)
+    if (composition.auras.length > 0) {
+      const auraWrap = el('div', 'squad-auras');
+      for (const aura of composition.auras) {
+        const chip = el('span', 'aura-chip', `${aura.def.name}·${aura.def.stat}+${aura.def.percent}%`);
+        chip.title = `${aura.def.description}\n提供者:${aura.providers.join('、')}`;
+        auraWrap.append(chip);
+      }
+      card.append(auraWrap);
+      const preview = el('div', 'aura-preview');
+      preview.append(el('span', 'aura-preview-label', '加成预览'));
+      for (const stat of ['伤害', '生存', '治疗'] as const) {
+        preview.append(el('span', `aura-stat${composition.auraBonus[stat] > 0 ? '' : ' aura-stat-zero'}`, `${stat}+${composition.auraBonus[stat]}%`));
+      }
+      card.append(preview);
+    } else {
+      card.append(el('div', 'aura-empty', '队内暂无职业光环 —— 编入不同职业即可点亮。'));
+    }
+
+    // 成员行:名字 + 职业·专精·职能 + 调离
+    const list = el('ul', 'squad-members');
+    if (composition.members.length === 0) {
+      list.append(el('li', 'empty-hint', '空小队 —— 从下方待命团员编入。'));
+    }
+    for (const member of composition.members) {
+      const cls = CLASS_BY_ID.get(member.classId);
+      const spec = cls?.specs.find((s) => s.id === member.specId);
+      const row = el('li', 'squad-member');
+      const info = el('span', 'squad-member-info');
+      const nameSpan = el('span', 'member-name', member.name);
+      if (member.isChairman) {
+        nameSpan.append(el('span', 'chairman-badge', '会长'));
+      }
+      info.append(nameSpan);
+      info.append(el('span', 'squad-member-class', `${cls?.name ?? '?'} · ${spec?.name ?? '?'} · ${spec?.role ?? '?'}`));
+      const remove = el('button', 'squad-remove', '调离');
+      remove.type = 'button';
+      remove.dataset.action = 'remove-member';
+      remove.dataset.memberId = String(member.id);
+      row.append(info, remove);
+      list.append(row);
+    }
+    card.append(list);
+    return card;
+  }
+
+  /** 待命团员行:选择目标小队并编入(满员禁用是展示行为,裁决在门面)。 */
+  function renderBenchRow(member: Member, squads: readonly { id: number; memberIds: readonly number[] }[]): HTMLLIElement {
+    const cls = CLASS_BY_ID.get(member.classId);
+    const spec = cls?.specs.find((s) => s.id === member.specId);
+
+    const row = el('li', 'bench-row');
+    row.dataset.memberId = String(member.id);
+    const info = el('div', 'bench-info');
+    const nameSpan = el('span', 'member-name', member.name);
+    if (member.isChairman) {
+      nameSpan.append(el('span', 'chairman-badge', '会长'));
+    }
+    info.append(nameSpan);
+    info.append(el('span', 'bench-class', `${cls?.name ?? '?'} · ${spec?.name ?? '?'} · ${spec?.role ?? '?'}`));
+    row.append(info);
+
+    if (squads.length > 0) {
+      const select = el('select', 'bench-select') as HTMLSelectElement;
+      let selectedSet = false;
+      for (const squad of squads) {
+        const full = squad.memberIds.length >= COMP.squadSize;
+        const option = el('option', undefined, `第 ${squads.indexOf(squad) + 1} 小队${full ? '(已满)' : ''}`) as HTMLOptionElement;
+        option.value = String(squad.id);
+        option.disabled = full;
+        if (!full && !selectedSet) {
+          option.selected = true;
+          selectedSet = true;
+        }
+        select.append(option);
+      }
+      const assign = el('button', 'pool-btn pool-btn-recruit', '编入');
+      assign.type = 'button';
+      assign.dataset.action = 'assign';
+      row.append(select, assign);
+      syncAssignEnabled(row, assign);
+    }
+    return row;
+  }
+
+  /** 按行内选择框当前目标小队是否满员,同步「编入」按钮的展示性禁用。 */
+  function syncAssignEnabled(row: HTMLElement, button: HTMLButtonElement): void {
+    const select = row.querySelector<HTMLSelectElement>('select');
+    const squad = select === null ? undefined : latestState?.squads.find((s) => s.id === Number(select.value));
+    const disabled = squad === undefined || squad.memberIds.length >= COMP.squadSize;
+    button.disabled = disabled;
+    button.title = disabled ? '目标小队已满' : '';
   }
 
   /** 名册列表:职业 / 等级 / 装等摘要(验收标准 1)。 */

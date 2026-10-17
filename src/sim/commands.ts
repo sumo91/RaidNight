@@ -12,7 +12,15 @@ export type GuildCommand =
   /** 拒绝申请(移出申请池) */
   | { readonly type: 'rejectApplicant'; readonly applicationId: number }
   /** 淘汰在册团员(移出名册;会长角色不可淘汰) */
-  | { readonly type: 'dismissMember'; readonly memberId: number };
+  | { readonly type: 'dismissMember'; readonly memberId: number }
+  /** 新建小队(编成;上限见 content/comp.maxSquads) */
+  | { readonly type: 'createSquad' }
+  /** 解散小队(仅空小队可解散) */
+  | { readonly type: 'disbandSquad'; readonly squadId: number }
+  /** 编入小队(已在别队则先调离;小队满员则拒绝) */
+  | { readonly type: 'assignToSquad'; readonly memberId: number; readonly squadId: number }
+  /** 调离小队(回到待命名册) */
+  | { readonly type: 'removeFromSquad'; readonly memberId: number };
 
 /** 公会名长度上限(规则只存在于 sim,UI 不做校验)。 */
 export const GUILD_NAME_MAX_LENGTH = 24;
