@@ -76,7 +76,7 @@ describe('模拟门面:指令与时间跳变(验收标准 3)', () => {
     // 状态快照:公会信息、游戏时钟及其派生量
     // (脚本累计游戏分钟:3017 + 1440 + 30240 + 1499 = 36196)
     expect(finalState.guild.name).toBe('暮光酒馆');
-    expect(finalState.members).toEqual([]); // 名册:T1 为空
+    expect(finalState.members).toHaveLength(6); // 建会名册:会长角色 + 5 名初始团员(T2)
     expect(finalState.clockGameMinutes).toBe(36196);
     expect(gameWeek(finalState.clockGameMinutes)).toBe(4);
     expect(gameDay(finalState.clockGameMinutes)).toBe(26);

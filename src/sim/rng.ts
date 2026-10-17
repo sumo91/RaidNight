@@ -25,3 +25,41 @@ export function pickOne<T>(state: number, pool: readonly T[]): [item: T, nextSta
   }
   return [item, nextState];
 }
+
+/** 带权重的随机条目(生成期分布配置用)。 */
+export interface WeightedEntry {
+  readonly weight: number;
+}
+
+/** 按权重取一项(权重为 0 的条目不会被抽中),并返回下一随机链状态。 */
+export function pickWeighted<T extends WeightedEntry>(
+  state: number,
+  entries: readonly T[],
+): [item: T, nextState: number] {
+  const total = entries.reduce((sum, entry) => sum + Math.max(0, entry.weight), 0);
+  if (total <= 0 || entries.length === 0) {
+    throw new Error('权重全为非正数,无法随机选取');
+  }
+  const [u, nextState] = nextFloat(state);
+  let cursor = u * total;
+  for (const entry of entries) {
+    cursor -= Math.max(0, entry.weight);
+    if (cursor < 0) {
+      return [entry, nextState];
+    }
+  }
+  // 浮点兜底:最后一个权重非零的条目
+  const lastPositive = [...entries].reverse().find((entry) => entry.weight > 0);
+  return [lastPositive as T, nextState];
+}
+
+/** 取闭区间 [min, max] 内的整数,并返回下一随机链状态。 */
+export function nextInt(state: number, min: number, max: number): [value: number, nextState: number] {
+  if (max < min) {
+    throw new Error('nextInt 区间非法:max < min');
+  }
+  const [u, nextState] = nextFloat(state);
+  const span = max - min + 1;
+  const value = min + Math.floor(u * span);
+  return [Math.min(value, max), nextState];
+}

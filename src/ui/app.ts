@@ -1,12 +1,19 @@
+import { ATTENDANCE_BY_ID } from '../content/attendance';
+import { CLASS_BY_ID } from '../content/classes';
+import type { Quality } from '../content/gear';
+import { SKILL_TIER_BY_ID } from '../content/skill-tiers';
+import { TRAIT_BY_ID } from '../content/traits';
 import { GAME_MINUTES_PER_DAY, GAME_MINUTES_PER_WEEK } from '../sim/clock';
 import type { SimInput } from '../sim/facade';
 import type { SimEvent } from '../sim/events';
-import type { GameState } from '../sim/state';
+import { averageItemLevel } from '../sim/roster';
+import type { GameState, Member } from '../sim/state';
 import { formatGameClock, formatGameStamp } from './format';
 
 /**
  * 薄渲染层:只读状态、派发输入,不含任何业务规则。
- * 一切规则(校验、结算、时间推进)都在 sim 门面内。
+ * 一切规则(校验、结算、时间推进、派生数值)都在 sim 门面内;
+ * 这里只做「状态 → DOM」的映射与纯展示行为(页签/选中)。
  */
 
 export interface AppHandle {
@@ -19,7 +26,7 @@ export interface MountOptions {
   dispatch: (input: SimInput) => void;
 }
 
-/** 五页签(DESIGN.md:名册/编成/日程/世界/金库·荣誉);T1 仅名册页签为空态。 */
+/** 五页签(DESIGN.md:名册/编成/日程/世界/金库·荣誉);名册是首页(ADR-0006 组建之乐)。 */
 const TABS = [
   { id: 'roster', label: '名册' },
   { id: 'squads', label: '编成' },
@@ -33,6 +40,14 @@ type TabId = (typeof TABS)[number]['id'];
 /** 日志缓冲上限(UI 侧的展示缓冲;完整日志由门面事件流给出)。 */
 const FEED_LIMIT = 50;
 
+/** 装备品质 → 样式类(纯展示映射,品质语义在 sim/content)。 */
+const QUALITY_CLASS: Record<Quality, string> = {
+  '白': 'q-white',
+  '绿': 'q-green',
+  '蓝': 'q-blue',
+  '紫': 'q-purple',
+};
+
 export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
   root.innerHTML = `
     <header class="app-header">
@@ -44,7 +59,8 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
     </header>
     <main class="panes">
       <section class="pane" data-pane="roster">
-        <p class="empty-hint">名册空空如也 —— 招募与团员系统在后续工单开放。</p>
+        <ul class="roster-list" data-ref="roster-list"></ul>
+        <div class="member-detail" data-ref="member-detail" hidden></div>
       </section>
       <section class="pane" data-pane="squads" hidden>
         <p class="empty-hint">「编成」页签在后续工单开放。</p>
@@ -80,6 +96,8 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
   const memberCountEl = requireElement<HTMLSpanElement>(root, 'member-count');
   const gameClockEl = requireElement<HTMLDivElement>(root, 'game-clock');
   const feedEl = requireElement<HTMLUListElement>(root, 'event-feed');
+  const rosterListEl = requireElement<HTMLUListElement>(root, 'roster-list');
+  const memberDetailEl = requireElement<HTMLDivElement>(root, 'member-detail');
 
   // 页签切换:纯展示行为(哪个 pane 可见),不是业务规则
   let activeTab: TabId = 'roster';
@@ -108,12 +126,31 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
     }
   });
 
+  // 名册浏览:点行看详情、返回回列表 —— 选中态是纯 UI 状态,不进 GameState
+  let selectedMemberId: number | null = null;
+  let latestState: GameState | null = null;
+  rosterListEl.addEventListener('click', (event) => {
+    const row = (event.target as HTMLElement).closest<HTMLElement>('[data-member-id]');
+    if (row !== null) {
+      selectedMemberId = Number(row.dataset.memberId);
+      renderRoster();
+    }
+  });
+  memberDetailEl.addEventListener('click', (event) => {
+    if ((event.target as HTMLElement).closest('[data-action="back"]') !== null) {
+      selectedMemberId = null;
+      renderRoster();
+    }
+  });
+
   const feed: SimEvent[] = [];
 
   function render(state: GameState, newEvents: readonly SimEvent[]): void {
+    latestState = state;
     guildNameEl.textContent = state.guild.name;
     memberCountEl.textContent = `在册团员 ${state.members.length} 人`;
     gameClockEl.textContent = formatGameClock(state.clockGameMinutes);
+    renderRoster();
 
     if (newEvents.length > 0) {
       feed.push(...newEvents);
@@ -136,13 +173,202 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
     }
   }
 
+  /** 名册区渲染:无选中 → 列表;有选中 → 详情(成员不存在时回退列表)。 */
+  function renderRoster(): void {
+    const state = latestState;
+    if (state === null) {
+      return;
+    }
+    const selected =
+      selectedMemberId === null
+        ? undefined
+        : state.members.find((m) => m.id === selectedMemberId);
+    if (selected === undefined) {
+      selectedMemberId = null;
+      memberDetailEl.hidden = true;
+      rosterListEl.hidden = false;
+      renderRosterList(state.members);
+    } else {
+      rosterListEl.hidden = true;
+      memberDetailEl.hidden = false;
+      renderMemberDetail(selected);
+    }
+  }
+
+  /** 名册列表:职业 / 等级 / 装等摘要(验收标准 1)。 */
+  function renderRosterList(members: readonly Member[]): void {
+    if (members.length === 0) {
+      rosterListEl.replaceChildren(
+        el('li', 'empty-hint', '名册空空如也 —— 招募系统在后续工单开放。'),
+      );
+      return;
+    }
+    rosterListEl.replaceChildren(
+      ...members.map((member) => {
+        const cls = CLASS_BY_ID.get(member.classId);
+        const spec = cls?.specs.find((s) => s.id === member.specId);
+        const classLine = `${cls?.name ?? '?'} · ${spec?.name ?? '?'}${spec ? ` · ${spec.role}` : ''}`;
+
+        const top = el('div', 'row-top');
+        const nameWrap = el('div', 'row-name');
+        nameWrap.append(el('span', 'member-name', member.name));
+        if (member.isChairman) {
+          nameWrap.append(el('span', 'chairman-badge', '会长'));
+        }
+        const summary = el('span', 'row-summary', `Lv${member.level} · 装等${averageItemLevel(member)}`);
+        top.append(nameWrap, summary);
+
+        const bottom = el('div', 'row-bottom');
+        bottom.append(el('span', 'row-class', classLine));
+        bottom.append(
+          el(
+            'span',
+            'row-vitals',
+            `心情${member.mood} 忠诚${member.loyalty} 疲劳${member.fatigue}`,
+          ),
+        );
+
+        const row = el('li', 'roster-row');
+        row.dataset.memberId = String(member.id);
+        row.append(top, bottom);
+        return row;
+      }),
+    );
+  }
+
+  /** 团员详情:全部维度 —— 三维/出勤/性格/技艺/装备(验收标准 2)。 */
+  function renderMemberDetail(member: Member): void {
+    const cls = CLASS_BY_ID.get(member.classId);
+    const spec = cls?.specs.find((s) => s.id === member.specId);
+    const style = ATTENDANCE_BY_ID.get(member.attendance.styleId);
+    const tier = SKILL_TIER_BY_ID.get(member.skillTierId);
+
+    const frag = document.createDocumentFragment();
+
+    const back = el('button', 'detail-back', '← 返回名册');
+    back.type = 'button';
+    back.dataset.action = 'back';
+    frag.append(back);
+
+    const title = el('div', 'detail-title');
+    const nameWrap = el('h3', 'detail-name');
+    nameWrap.append(el('span', 'member-name', member.name));
+    if (member.isChairman) {
+      nameWrap.append(el('span', 'chairman-badge', '会长'));
+    }
+    title.append(nameWrap);
+    title.append(el('div', 'detail-classline', `${cls?.name ?? '?'} · ${spec?.name ?? '?'} · ${spec?.role ?? '?'}`));
+    if (cls !== undefined) {
+      title.append(el('p', 'detail-flavor', cls.description));
+    }
+    frag.append(title);
+
+    const stats = el('div', 'detail-stats');
+    stats.append(
+      el('div', 'stat', `等级 ${member.level}`),
+      el('div', 'stat stat-accent', `装等 ${averageItemLevel(member)}`),
+    );
+    frag.append(stats);
+
+    frag.append(el('h4', 'detail-section', '三维状态'));
+    const vitals = el('div', 'detail-vitals');
+    vitals.append(
+      vitalBar('心情', member.mood),
+      vitalBar('忠诚', member.loyalty),
+      vitalBar('疲劳', member.fatigue),
+    );
+    frag.append(vitals);
+
+    frag.append(el('h4', 'detail-section', '出勤画像'));
+    const attendance = el('div', 'detail-block');
+    attendance.append(
+      el('div', 'block-title', `${style?.name ?? '?'} —— ${style?.description ?? ''}`),
+      meterBar('基础出勤', member.attendance.baseRate),
+    );
+    frag.append(attendance);
+
+    frag.append(el('h4', 'detail-section', '性格标签'));
+    const traits = el('div', 'detail-traits');
+    for (const id of member.traits) {
+      const def = TRAIT_BY_ID.get(id);
+      if (def !== undefined) {
+        const chip = el('span', 'trait-chip', def.name);
+        chip.title = def.description;
+        traits.append(chip);
+      }
+    }
+    if (traits.childElementCount === 0) {
+      traits.append(el('span', 'muted', '无'));
+    }
+    frag.append(traits);
+
+    frag.append(el('h4', 'detail-section', '技艺评级'));
+    frag.append(el('div', 'detail-block', `${tier?.name ?? '?'} —— ${tier?.description ?? ''}`));
+
+    frag.append(el('h4', 'detail-section', '装备(8 部位)'));
+    const gearList = el('ul', 'gear-list');
+    for (const item of member.gear) {
+      const li = el('li', 'gear-row');
+      li.append(el('span', 'gear-slot', item.slot));
+      li.append(el('span', `gear-quality ${QUALITY_CLASS[item.quality]}`, item.quality));
+      li.append(el('span', 'gear-ilvl', `装等 ${item.itemLevel}`));
+      gearList.append(li);
+    }
+    frag.append(gearList);
+
+    memberDetailEl.replaceChildren(frag);
+  }
+
+  /** 三维状态条(0-100;纯展示)。 */
+  function vitalBar(label: string, value: number): HTMLElement {
+    const row = el('div', 'vital-row');
+    row.append(el('span', 'vital-label', label));
+    const track = el('div', 'vital-track');
+    const fill = el('div', `vital-fill${label === '疲劳' ? ' vital-fill-inverse' : ''}`);
+    fill.style.width = `${clampPercent(value)}%`;
+    track.append(fill);
+    row.append(track, el('span', 'vital-value', String(value)));
+    return row;
+  }
+
+  /** 出勤率条(0-100;纯展示)。 */
+  function meterBar(label: string, value: number): HTMLElement {
+    const row = el('div', 'vital-row');
+    row.append(el('span', 'vital-label', label));
+    const track = el('div', 'vital-track');
+    const fill = el('div', 'vital-fill');
+    fill.style.width = `${clampPercent(value)}%`;
+    track.append(fill);
+    row.append(track, el('span', 'vital-value', `${value}%`));
+    return row;
+  }
+
+  function clampPercent(value: number): number {
+    return Math.max(0, Math.min(100, value));
+  }
+
   return { render };
 }
 
+function el<K extends keyof HTMLElementTagNameMap>(
+  tag: K,
+  className?: string,
+  text?: string,
+): HTMLElementTagNameMap[K] {
+  const node = document.createElement(tag);
+  if (className !== undefined) {
+    node.className = className;
+  }
+  if (text !== undefined) {
+    node.textContent = text;
+  }
+  return node;
+}
+
 function requireElement<T extends HTMLElement>(root: HTMLElement, ref: string): T {
-  const el = root.querySelector<T>(`[data-ref="${ref}"]`);
-  if (el === null) {
+  const dom = root.querySelector<T>(`[data-ref="${ref}"]`);
+  if (dom === null) {
     throw new Error(`应用外壳缺少节点:${ref}`);
   }
-  return el;
+  return dom;
 }
