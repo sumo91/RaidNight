@@ -84,3 +84,24 @@ export function nextSettlement(state: GameState): SettlementCountdown {
     isWeekBoundary: nextDayAt % GAME_MINUTES_PER_WEEK === 0,
   };
 }
+
+/** 团本夜排期:开团安排的结算时刻(派生量;团本 CD = 游戏周,DESIGN)。 */
+export interface RaidNightSchedule {
+  /** 团本夜时刻(下一个游戏周边界,自建会起累计的游戏分钟)。 */
+  readonly atGameMinutes: number;
+  /** 距当前时钟的剩余游戏分钟(恒 > 0)。 */
+  readonly remainingGameMinutes: number;
+}
+
+/**
+ * 下一个团本夜 = 下一个游戏周边界(与门面 advanceClock 的周边界结算同式):
+ * 开团安排在跨过周边界时整夜结算。未开团时为 undefined。
+ */
+export function nextRaidNight(state: GameState): RaidNightSchedule | undefined {
+  if (state.raidPlan === undefined) {
+    return undefined;
+  }
+  const clock = state.clockGameMinutes;
+  const nextWeekAt = (Math.floor(clock / GAME_MINUTES_PER_WEEK) + 1) * GAME_MINUTES_PER_WEEK;
+  return { atGameMinutes: nextWeekAt, remainingGameMinutes: nextWeekAt - clock };
+}

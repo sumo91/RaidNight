@@ -150,7 +150,7 @@ describe('版本迁移:旧版本存档可读(验收标准 3)', () => {
     expect(decodeSave('{"kind":"wowidle-save","version":4}')).toBeNull(); // 缺 state
     expect(decodeSave('{"kind":"别的游戏","version":4,"state":{}}')).toBeNull(); // 非本游戏文件
     expect(decodeSave('{"version":0,"state":{}}')).toBeNull(); // 非法版本
-    expect(decodeSave('{"version":6,"state":{}}')).toBeNull(); // 未来版本
+    expect(decodeSave('{"version":7,"state":{}}')).toBeNull(); // 未来版本
     expect(decodeSave('{"version":1.5,"state":{}}')).toBeNull(); // 非整数版本
     // 版本正确但结构不完整:关键字段缺失视为损坏
     expect(decodeSave('{"kind":"wowidle-save","version":4,"state":{"members":1}}')).toBeNull();

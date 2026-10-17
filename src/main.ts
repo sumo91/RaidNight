@@ -146,12 +146,21 @@ function settleOffline(elapsedRealMs: number): { events: SimEvent[]; harvest: Of
   const wins = events.filter((e) => e.kind === '下本' && e.text.includes('速通')).length;
   const losses = events.filter((e) => e.kind === '下本' && e.text.includes('败退')).length;
   const equipped = events.filter((e) => e.kind === '下本' && e.text.includes('换上')).length;
+  const raidKills = events.filter((e) => e.kind === '团本' && e.text.includes('被击杀')).length;
+  const raidWipes = events.filter((e) => e.kind === '团本' && e.text.includes('团灭于')).length;
+  const raidClears = events.filter((e) => e.kind === '团本' && e.text.includes('全通')).length;
   const highlights: string[] = [];
   if (wins + losses > 0) {
     highlights.push(`下本速通 ${wins} 次、败退 ${losses} 次。`);
   }
   if (equipped > 0) {
     highlights.push(`缴获并换上 ${equipped} 件装备。`);
+  }
+  if (raidClears > 0) {
+    highlights.push(`团本夜全通 ${raidClears} 次。`);
+  }
+  if (raidKills + raidWipes > 0) {
+    highlights.push(`团本击杀首领 ${raidKills} 名${raidWipes > 0 ? `、团灭 ${raidWipes} 次` : ''}。`);
   }
   const harvest: OfflineHarvestView = {
     awayText: formatRealDuration(elapsedRealMs),

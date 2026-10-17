@@ -1605,3 +1605,309 @@ body {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
+
+/* ———— 团本(T10):编成页开团面板 ———— */
+
+.raid-open {
+  margin-bottom: 14px;
+}
+
+.raid-open-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+
+.raid-plan-line {
+  margin: 2px 0 10px;
+  font-size: 12.5px;
+  color: var(--accent);
+}
+
+.raid-plan-idle {
+  color: var(--muted);
+}
+
+.raid-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.raid-card {
+  background: #241c33;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+
+/* 首领表预览:顺序号 + 难度 + 硬门槛徽标(赛前决策的信息面) */
+.raid-boss-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.raid-boss-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+}
+
+.raid-boss-order {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #3a2c55;
+  color: var(--accent);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+}
+
+.raid-boss-name {
+  flex: 1;
+  color: var(--text);
+}
+
+.raid-boss-meta {
+  flex: none;
+  font-size: 11.5px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.raid-boss-gate {
+  flex: none;
+  font-size: 11px;
+  color: #e08c4c;
+  background: #3a2018;
+  border: 1px solid #6b3b30;
+  border-radius: 4px;
+  padding: 0 5px;
+}
+
+/* ———— 团本夜(T10):日程页赛前预览 + 直播视图 ———— */
+
+.raid-night {
+  margin-bottom: 14px;
+}
+
+.raid-plan-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+
+.raid-plan-title {
+  margin: 0 0 4px;
+  font-size: 14px;
+  color: var(--accent);
+}
+
+.raid-plan-stamp {
+  margin: 0 0 4px;
+  font-size: 12.5px;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.raid-plan-note {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* 直播视图:全通描绿框、团灭描红框(收束后一目了然) */
+.raid-live {
+  background: #120e1a;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+
+.raid-live-win {
+  border-color: #4c8760;
+}
+
+.raid-live-wipe {
+  border-color: #874c53;
+}
+
+.raid-live-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 8px;
+}
+
+.raid-live-title {
+  font-size: 14px;
+  color: var(--accent);
+}
+
+.raid-live-stamp {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.raid-boss-top {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.raid-boss-name {
+  font-size: 13.5px;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.raid-boss-gate-live {
+  font-size: 11px;
+  color: #e08c4c;
+}
+
+.raid-hp-text {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.raid-hp {
+  height: 14px;
+  background: #2a1f1f;
+  border: 1px solid #4a2c2c;
+  border-radius: 7px;
+  overflow: hidden;
+}
+
+.raid-hp-fill {
+  height: 100%;
+  width: 100%;
+  background: linear-gradient(90deg, #a93226, #e74c3c);
+  transition: width 0.1s linear;
+}
+
+/* 40 人状态点阵:一行 = 一支小队;颜色 = 职能,灰暗 = 倒下 */
+.raid-dots-panel {
+  margin-top: 8px;
+}
+
+.raid-dots-label {
+  display: block;
+  font-size: 11px;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+
+.raid-dots {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 4px;
+}
+
+.raid-dot {
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: 3px;
+  background: #3f3557;
+}
+
+.dot-坦克 {
+  background: #5a7fbf;
+}
+
+.dot-治疗 {
+  background: #5abf8a;
+}
+
+.dot-输出 {
+  background: #bf5a5a;
+}
+
+.raid-dot.dot-down {
+  background: #2c2333 !important;
+  opacity: 0.45;
+}
+
+/* 滚动战斗日志:固定高度,自动滚底 */
+.raid-log-panel {
+  margin-top: 8px;
+}
+
+.raid-log {
+  list-style: none;
+  margin: 0;
+  padding: 6px 8px;
+  height: 128px;
+  overflow-y: auto;
+  background: #0e0b14;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.raid-log-line {
+  color: var(--text);
+}
+
+.raid-log-sys {
+  color: var(--muted);
+}
+
+.raid-log-win {
+  color: #8fd6a4;
+}
+
+.raid-log-wipe {
+  color: #e09a9a;
+}
+
+.raid-summary {
+  margin-top: 8px;
+  background: #1c1628;
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
+.raid-summary-line {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.7;
+}
+
+.raid-summary-win {
+  color: #8fd6a4;
+}
+
+.raid-summary-wipe {
+  color: #e09a9a;
+}
+
+.raid-live-controls {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.raid-live-hint {
+  flex: 1;
+  font-size: 11px;
+  color: var(--muted);
+}

@@ -140,9 +140,27 @@ export interface TeamCheckResult {
 /**
  * 团队检查(GLOSSARY:团队 = 最多 8 小队的团本出战阵容):
  * 满员小队数、总坦克、总治疗达到门槛,且每支小队至少 1 坦 1 奶(职能覆盖)。
+ * 开团指令裁决与团本夜结算(门面)共用同一判定。
  */
 export function teamCheck(state: GameState): TeamCheckResult {
-  const compositions = squadCompositions(state);
+  return teamCheckOf(state.members, state.squads);
+}
+
+/** 团队检查的分片入口:以当前名册与小队直接判定(团本夜结算时名册已是当日最新)。 */
+export function teamCheckOf(
+  members: readonly Member[],
+  squads: readonly Squad[],
+): TeamCheckResult {
+  const memberById = new Map(members.map((member) => [member.id, member]));
+  const compositions = squads.map((squad, index) =>
+    composeSquad(
+      squad,
+      index + 1,
+      squad.memberIds
+        .map((id) => memberById.get(id))
+        .filter((member): member is Member => member !== undefined),
+    ),
+  );
   const totals: TeamCheckTotals = {
     squads: compositions.length,
     fullSquads: compositions.filter((c) => c.members.length >= COMP.squadSize).length,

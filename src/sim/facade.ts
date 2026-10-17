@@ -2,13 +2,16 @@ import { DAILY_FLAVOR_POOL } from '../content/daily-flavor';
 import { COMP } from '../content/comp';
 import { DUNGEON_BY_ID } from '../content/dungeons';
 import { LEVELING_MAP_BY_ID } from '../content/maps';
+import { RAID_BY_ID } from '../content/raids';
 import type { GuildCommand } from './commands';
 import { GAME_MINUTES_PER_DAY, GAME_MINUTES_PER_WEEK, gameDay, gameWeek } from './clock';
 import { settleDungeonDay, squadDungeon, squadDungeonReadiness } from './dungeon';
 import type { SimEvent, SimEventKind } from './events';
 import { evaluateUnlockGates } from './ladder';
+import { teamCheck } from './comp';
 import { guildAverageItemLevel, guildAverageLevel } from './roster';
 import { settleLevelingDay, squadLevelingMap } from './leveling';
+import { settleRaidNight } from './raid';
 import { generateApplicantPool } from './recruit';
 import { pickOne } from './rng';
 import { createInitialState, normalizeGuildName, type GameState, type Member, type Squad } from './state';
@@ -275,6 +278,43 @@ function applyCommand(state: GameState, command: GuildCommand, collector: EventC
       );
       return { ...state, squads };
     }
+    case 'openRaid': {
+      const raid = RAID_BY_ID.get(command.raidId);
+      if (raid === undefined) {
+        return state; // 团本不在内容表:忽略
+      }
+      // 内容阶梯门槛:与 5 人本同一双维判定(未达标不可见/不可进入)
+      const unlock = evaluateUnlockGates(raid.unlock, {
+        averageLevel: guildAverageLevel(state.members),
+        averageItemLevel: guildAverageItemLevel(state.members),
+      });
+      if (!unlock.unlocked) {
+        return state; // 未解锁:忽略
+      }
+      // 团队检查:通过后方可开团(验收标准 1)
+      if (!teamCheck(state).passed) {
+        return state; // 阵容不齐:忽略(编成页会标示缺口)
+      }
+      if (state.raidPlan?.raidId === raid.id) {
+        return state; // 已开同一团本:无变化、无事件
+      }
+      collector.push(
+        state.clockGameMinutes,
+        '团本',
+        `已开团:「${raid.name}」—— 团本夜定于周边界打响,按首领顺序逐个结算。`,
+      );
+      return {
+        ...state,
+        raidPlan: { raidId: raid.id, openedAtGameMinutes: state.clockGameMinutes },
+      };
+    }
+    case 'cancelRaid': {
+      if (state.raidPlan === undefined) {
+        return state; // 本就没有开团安排:忽略
+      }
+      collector.push(state.clockGameMinutes, '团本', '取消开团安排,本周不开团。');
+      return { ...state, raidPlan: undefined };
+    }
   }
 }
 
@@ -298,9 +338,13 @@ function advanceClock(state: GameState, delta: number, collector: EventCollector
   let applicants = state.applicants;
   let nextApplicationId = state.nextApplicationId;
   let lastDungeonRun = state.lastDungeonRun;
+  let vault = state.vault;
+  let raidPlan = state.raidPlan;
+  let lastRaidNight = state.lastRaidNight;
 
   // 逐个跨越的边界结算;游戏周边界必是游戏日边界(分钟数整除)。
-  // 日界结算顺序固定:日更文案 → 申请池刷新 → 练级/休整 → 下本结算(自动层)→(周更)。
+  // 日界结算顺序固定:日更文案 → 申请池刷新 → 练级/休整 → 下本结算(自动层)
+  // →(周界)团本夜整夜结算 → 周更(团本 CD 重置)。
   for (;;) {
     const nextDayAt = (Math.floor(cursor / GAME_MINUTES_PER_DAY) + 1) * GAME_MINUTES_PER_DAY;
     const nextWeekAt = (Math.floor(cursor / GAME_MINUTES_PER_WEEK) + 1) * GAME_MINUTES_PER_WEEK;
@@ -339,11 +383,40 @@ function advanceClock(state: GameState, delta: number, collector: EventCollector
     lastDungeonRun = dungeonDay.lastReport ?? lastDungeonRun;
 
     if (nextAt === nextWeekAt) {
+      // 团本夜(计划层):开团安排在周边界整夜结算(直播视图数据 + 战斗日志);
+      // 夜结束安排即清空 —— 团本 CD = 游戏周,下周重新开团
+      if (raidPlan !== undefined) {
+        const raidNight = settleRaidNight({
+          members,
+          squads: state.squads,
+          vault,
+          plan: raidPlan,
+          rngState,
+          atGameMinutes: nextAt,
+          emit: (text) => collector.push(nextAt, '团本', text),
+        });
+        members = raidNight.members;
+        vault = raidNight.vault;
+        rngState = raidNight.rngState;
+        lastRaidNight = raidNight.report ?? lastRaidNight;
+        raidPlan = undefined;
+      }
       collector.push(nextAt, '周更', `第 ${gameWeek(nextAt)} 周开始,团本 CD 已重置。`);
     }
   }
 
-  return { ...state, clockGameMinutes: target, rngState, members, applicants, nextApplicationId, lastDungeonRun };
+  return {
+    ...state,
+    clockGameMinutes: target,
+    rngState,
+    members,
+    applicants,
+    nextApplicationId,
+    lastDungeonRun,
+    vault,
+    raidPlan,
+    lastRaidNight,
+  };
 }
 
 /** 门面对象:封装当前状态,供装配层(UI)与测试驱动。 */

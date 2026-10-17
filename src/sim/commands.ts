@@ -28,7 +28,11 @@ export type GuildCommand =
   /** 安排小队下本(进驻已解锁 5 人本;未解锁/未满职能由门面忽略) */
   | { readonly type: 'assignDungeon'; readonly squadId: number; readonly dungeonId: string }
   /** 停止小队下本(回城休整,疲劳自然恢复) */
-  | { readonly type: 'stopDungeon'; readonly squadId: number };
+  | { readonly type: 'stopDungeon'; readonly squadId: number }
+  /** 开团(计划层:安排下一个团本夜;内容阶梯未解锁/团队检查未过由门面忽略) */
+  | { readonly type: 'openRaid'; readonly raidId: string }
+  /** 取消开团安排(本周不开团) */
+  | { readonly type: 'cancelRaid' };
 
 /** 公会名长度上限(规则只存在于 sim,UI 不做校验)。 */
 export const GUILD_NAME_MAX_LENGTH = 24;

@@ -2,6 +2,7 @@ import { GUILD_NAME_MAX_LENGTH } from './commands';
 import type { EncounterBand } from './encounter';
 import { generateFoundingRoster } from './member-gen';
 import { generateApplicantPool } from './recruit';
+import { VAULT } from '../content/economy';
 import { RECRUIT } from '../content/recruit';
 import type { GearSlot, Quality } from '../content/gear';
 
@@ -117,6 +118,84 @@ export interface AttendanceProfile {
   readonly baseRate: number;
 }
 
+/**
+ * 公会金库(GLOSSARY)的最小实现(T10):余额 + 历史修理支出累计。
+ * 完整经济(收入、分配制度、个人金)在 T11 经济工单 —— 届时扩字段,
+ * 旧存档经版本迁移补缺省。
+ */
+export interface GuildVault {
+  /** 当前余额(金币)。 */
+  readonly gold: number;
+  /** 历史修理支出累计(团灭代价;只增不减)。 */
+  readonly repairSpent: number;
+}
+
+/**
+ * 开团安排(计划层):已开团的团本。
+ * 团本夜 = 下一个游戏周边界(团本 CD = 游戏周,DESIGN):门面在跨过
+ * 周边界时按首领顺序整夜结算,夜结束安排即清空(下周重新开团)。
+ */
+export interface RaidPlan {
+  readonly raidId: string;
+  /** 开团时刻(游戏分钟;展示用)。 */
+  readonly openedAtGameMinutes: number;
+}
+
+/** 团本夜单首领结算结果(直播视图与事件日志的数据面)。 */
+export interface RaidBossOutcome {
+  readonly bossId: string;
+  readonly name: string;
+  readonly killed: boolean;
+  /** 团队战力与难度目标(统一结算引擎的评估快照)。 */
+  readonly power: number;
+  readonly target: number;
+  readonly successChance: number;
+  readonly band: EncounterBand;
+  /** 硬门槛装等(设置了即硬门槛首领;undefined = 无硬门槛)。 */
+  readonly hardGateItemLevel?: number;
+  readonly hardGateMet: boolean;
+  /** 本次战斗倒下的团人数(团灭 = 全员;击杀时 = 险胜程度,上限在内容表)。 */
+  readonly fallen: number;
+  /** 本首领掉落与去向(团灭/失败为空数组)。 */
+  readonly drops: readonly DropOutcome[];
+}
+
+/** 团灭代价结算快照(修理金 / 疲劳 / 士气,无永久损失)。 */
+export interface RaidWipe {
+  /** 团灭在第几个首领(1 起)。 */
+  readonly bossIndex: number;
+  readonly bossName: string;
+  /** 实际扣除的修理金(金库不足时按余额封顶)。 */
+  readonly repairGold: number;
+  /** 每名团员的额外疲劳(在每次首领战疲劳之上)。 */
+  readonly fatigue: number;
+  /** 每名团员的士气(心情)打击。 */
+  readonly moodHit: number;
+}
+
+/** 一次团本夜的结算报告(直播视图:首领血条 + 40 人点阵 + 滚动战斗日志)。 */
+export interface RaidNightReport {
+  readonly raidId: string;
+  readonly raidName: string;
+  readonly atGameMinutes: number;
+  /** 出战阵容快照(点阵的一行 = 一支小队;按小队顺序)。 */
+  readonly lineup: readonly {
+    readonly squadOrdinal: number;
+    readonly name: string;
+    readonly role: string;
+    readonly itemLevel: number;
+  }[];
+  /** 全团平均装等(结算时刻)。 */
+  readonly teamItemLevel: number;
+  /** 按顺序的首领结算结果。 */
+  readonly bosses: readonly RaidBossOutcome[];
+  /** 全通 = true;团灭 = false(此时给出代价快照)。 */
+  readonly cleared: boolean;
+  readonly wipe?: RaidWipe;
+  /** 本夜修理金合计(实付;全通为 0)。 */
+  readonly repairGold: number;
+}
+
 /** 公会信息:玩家管理的核心成长主体。 */
 export interface GuildInfo {
   readonly name: string;
@@ -155,6 +234,12 @@ export interface GameState {
   readonly nextApplicationId: number;
   /** 最近一次下本的结果卡数据(结构化;历史过程见事件日志的「下本」条目) */
   readonly lastDungeonRun?: DungeonRunReport;
+  /** 公会金库(最小实现:T10 余额 + 修理支出;经济面在 T11)。 */
+  readonly vault: GuildVault;
+  /** 当前开团安排(缺省 = 本周未开团;团本夜 = 下一个游戏周边界)。 */
+  readonly raidPlan?: RaidPlan;
+  /** 最近一次团本夜的结算报告(结构化;过程见事件日志的「团本」条目) */
+  readonly lastRaidNight?: RaidNightReport;
   /** 下一个事件序号 */
   readonly nextEventSeq: number;
 }
@@ -186,6 +271,9 @@ export function createInitialState(seed: number, guildName?: string): GameState 
     applicants: pool.applicants,
     nextApplicationId: pool.nextApplicationId,
     lastDungeonRun: undefined,
+    vault: { gold: VAULT.startingGold, repairSpent: 0 },
+    raidPlan: undefined,
+    lastRaidNight: undefined,
     nextEventSeq: 1,
   };
 }

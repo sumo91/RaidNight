@@ -3,6 +3,7 @@ import { COMP } from '../content/comp';
 import { CLASS_BY_ID } from '../content/classes';
 import type { Quality } from '../content/gear';
 import { LEVELING } from '../content/maps';
+import { RAID_BY_ID, RAID_SETTLEMENT } from '../content/raids';
 import { SKILL_TIER_BY_ID } from '../content/skill-tiers';
 import { TRAIT_BY_ID } from '../content/traits';
 import { GAME_MINUTES_PER_DAY, GAME_MINUTES_PER_WEEK, gameMinutesToRealMs } from '../sim/clock';
@@ -11,9 +12,16 @@ import type { SimEvent } from '../sim/events';
 import { squadCompositions, teamCheck, unassignedMembers } from '../sim/comp';
 import { dungeonStatuses, squadDungeon, squadDungeonReadiness } from '../sim/dungeon';
 import { levelingMapStatuses, squadLevelingMap, xpToNextLevel } from '../sim/leveling';
+import { raidStatuses } from '../sim/raid';
 import { averageItemLevel, guildAverageItemLevel, guildAverageLevel } from '../sim/roster';
-import { activityQueue, nextSettlement } from '../sim/schedule';
-import type { DungeonRunReport, GameState, Member } from '../sim/state';
+import { activityQueue, nextRaidNight, nextSettlement } from '../sim/schedule';
+import type {
+  DungeonRunReport,
+  GameState,
+  Member,
+  RaidBossOutcome,
+  RaidNightReport,
+} from '../sim/state';
 import { formatGameClock, formatGameDuration, formatGameStamp, formatRealDuration } from './format';
 
 /**
@@ -114,6 +122,7 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
       </section>
       <section class="pane" data-pane="squads" hidden>
         <div class="team-check" data-ref="team-check"></div>
+        <div class="raid-open" data-ref="raid-open"></div>
         <div class="squad-toolbar">
           <button type="button" class="squad-create" data-action="create-squad">新建小队</button>
           <span class="squad-cap" data-ref="squad-cap"></span>
@@ -129,6 +138,14 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
       </section>
       <section class="pane" data-pane="schedule" hidden>
         <div class="offline-harvest" data-ref="offline-harvest" hidden></div>
+        <div class="raid-night">
+          <div class="pool-head">
+            <h2 class="section-title">团本夜</h2>
+            <span class="pool-sub" data-ref="raid-night-sub"></span>
+          </div>
+          <div class="raid-plan" data-ref="raid-plan"></div>
+          <div class="raid-live-wrap" data-ref="raid-live-wrap" hidden></div>
+        </div>
         <div class="settlement-panel">
           <div class="settlement-head">
             <h2 class="section-title">下一场结算</h2>
@@ -209,6 +226,10 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
   const poolFullHintEl = requireElement<HTMLParagraphElement>(root, 'pool-full-hint');
   const poolListEl = requireElement<HTMLUListElement>(root, 'pool-list');
   const teamCheckEl = requireElement<HTMLDivElement>(root, 'team-check');
+  const raidOpenEl = requireElement<HTMLDivElement>(root, 'raid-open');
+  const raidNightSubEl = requireElement<HTMLSpanElement>(root, 'raid-night-sub');
+  const raidPlanEl = requireElement<HTMLDivElement>(root, 'raid-plan');
+  const raidLiveWrapEl = requireElement<HTMLDivElement>(root, 'raid-live-wrap');
   const squadCapEl = requireElement<HTMLSpanElement>(root, 'squad-cap');
   const squadListEl = requireElement<HTMLUListElement>(root, 'squad-list');
   const benchSubEl = requireElement<HTMLSpanElement>(root, 'bench-sub');
@@ -451,6 +472,20 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
     }
   });
 
+  // 开团操作(编成页):转交门面裁决 —— 内容门槛/团队检查的最终裁决都在 sim,
+  // 此处只做展示性禁用与提示
+  raidOpenEl.addEventListener('click', (event) => {
+    const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-action]');
+    if (button === null || button.disabled) {
+      return;
+    }
+    if (button.dataset.action === 'open-raid' && button.dataset.raidId !== undefined) {
+      options.dispatch({ command: { type: 'openRaid', raidId: button.dataset.raidId }, deltaGameMinutes: 0 });
+    } else if (button.dataset.action === 'cancel-raid') {
+      options.dispatch({ command: { type: 'cancelRaid' }, deltaGameMinutes: 0 });
+    }
+  });
+
   // 申请池操作:只是把「招入/拒绝」转交给门面裁决(规则一律在 sim;
   // 名册已满时按钮只作展示性禁用,门面仍会最终拒绝越界指令)
   poolListEl.addEventListener('click', (event) => {
@@ -619,6 +654,9 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
     }
     teamCheckEl.replaceChildren(panel);
 
+    // 团本开团面板(T10):团队检查的裁决结果直接决定开团可用性
+    renderRaidOpen(state);
+
     // 工具条:新建小队(达上限时展示性禁用,门面仍做最终裁决)
     const createButton = root.querySelector<HTMLButtonElement>('[data-action="create-squad"]');
     const capped = state.squads.length >= COMP.maxSquads;
@@ -762,6 +800,7 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
     const averageItemLevel = guildAverageItemLevel(state.members);
     levelingAvgEl.textContent = `公会平均等级 ${averageLevel} · 平均装等 ${averageItemLevel}`;
     renderCountdown(state);
+    renderRaidNight(state);
     renderQueue(state);
     renderDungeonReport(state.lastDungeonRun);
 
@@ -934,6 +973,486 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
         return row;
       }),
     );
+  }
+
+  /** 团本开团面板(编成页):门槛/团队检查状态 + 开团与取消(裁决一律在 sim)。 */
+  function renderRaidOpen(state: GameState): void {
+    const check = teamCheck(state);
+    const statuses = raidStatuses(state.members);
+    const plan = state.raidPlan;
+
+    const wrap = el('div', 'raid-open-card');
+    const head = el('div', 'pool-head');
+    head.append(el('h2', 'section-title', '团本'));
+    // 最小金库的可见面:余额 + 历史修理支出(完整经济在 T11)
+    head.append(el('span', 'pool-sub', `金库 ${state.vault.gold} 金 · 历史修理支出 ${state.vault.repairSpent} 金`));
+    wrap.append(head);
+
+    if (plan !== undefined) {
+      const raid = RAID_BY_ID.get(plan.raidId);
+      wrap.append(
+        el(
+          'p',
+          'raid-plan-line',
+          raid !== undefined
+            ? `已开团:「${raid.name}」—— 团本夜在下一个周边界打响,按首领顺序结算,赛中只观赛。`
+            : '已开团:安排的团本已不在内容表,团本夜将自动撤销。',
+        ),
+      );
+    } else {
+      wrap.append(el('p', 'raid-plan-line raid-plan-idle', '本周未开团 —— 团队检查通过后即可安排团本夜。'));
+    }
+
+    const list = el('ul', 'raid-list');
+    for (const { def, unlocked, unmet } of statuses) {
+      const card = el('li', `raid-card${unlocked ? '' : ' map-locked'}`);
+      const cardHead = el('div', 'map-head');
+      cardHead.append(el('span', 'map-name', def.name));
+      cardHead.append(el('span', 'map-tier map-tier-dungeon', `第 ${def.tier} 档`));
+      cardHead.append(
+        el(
+          'span',
+          'map-band',
+          `门槛 Lv≥${def.unlock.averageLevel} · 装等≥${def.unlock.averageItemLevel} · 首领 ${def.bosses.length} 名`,
+        ),
+      );
+      card.append(cardHead);
+      card.append(el('p', 'map-desc', def.description));
+
+      // 首领表预览:难度与硬门槛(赛前决策的信息面)
+      const bosses = el('ul', 'raid-boss-list');
+      def.bosses.forEach((boss, i) => {
+        const row = el('li', 'raid-boss-row');
+        row.append(el('span', 'raid-boss-order', String(i + 1)));
+        row.append(el('span', 'raid-boss-name', boss.name));
+        row.append(el('span', 'raid-boss-meta', `难度 ${boss.difficultyTarget}`));
+        if (boss.hardGateItemLevel !== undefined) {
+          row.append(el('span', 'raid-boss-gate', `硬门槛 装等≥${boss.hardGateItemLevel}`));
+        }
+        bosses.append(row);
+      });
+      card.append(bosses);
+
+      if (!unlocked) {
+        card.append(
+          el(
+            'div',
+            'map-lock',
+            `未解锁 —— 需${unmet.join('、')}(当前 等级 ${guildAverageLevel(state.members)} · 装等 ${guildAverageItemLevel(state.members)})`,
+          ),
+        );
+      }
+
+      const actions = el('div', 'pool-actions');
+      if (plan?.raidId === def.id) {
+        const cancel = el('button', 'pool-btn pool-btn-reject', '取消开团');
+        cancel.type = 'button';
+        cancel.dataset.action = 'cancel-raid';
+        actions.append(cancel);
+      } else {
+        const open = el('button', 'pool-btn pool-btn-recruit', '开团');
+        open.type = 'button';
+        open.dataset.action = 'open-raid';
+        open.dataset.raidId = def.id;
+        if (!unlocked) {
+          open.disabled = true; // 展示性禁用:真实裁决仍在门面
+          open.title = `未解锁:需${unmet.join('、')}`;
+        } else if (!check.passed) {
+          open.disabled = true;
+          open.title = `团队检查未通过:${check.failures[0]?.text ?? ''}`;
+        }
+        actions.append(open);
+      }
+      card.append(actions);
+      list.append(card);
+    }
+    wrap.append(list);
+    raidOpenEl.replaceChildren(wrap);
+  }
+
+  // ———— 团本夜直播视图(T10):首领血条 + 40 人点阵 + 滚动战斗日志 ————
+  // 演出是纯表现:回放结构化 RaidNightReport(战斗胜负在 sim 已写定),
+  // 不推进游戏时间、不做任何业务规则;重播/跳过是展示行为。
+
+  /** 播放节拍(毫秒)与演出常量:血条下坠步长、团灭残值、日志保留条数。 */
+  const RAID_TICK_MS = 90;
+  const RAID_HP_STEP = 5;
+  const RAID_WIPE_FLOOR = 40;
+  const RAID_LOG_LIMIT = 40;
+  /** 演出闲笔(纯 UI 文案,轮换使用;模拟内容一律在 src/content)。 */
+  const RAID_FLAVOR = [
+    '坦克稳住仇恨,仇恨链没有断。',
+    '治疗链一刻不停。',
+    '输出全开,首领血条肉眼可见地下坠。',
+    '首领狂怒,团队阵型微收。',
+    '远程拉开距离,近战贴身补刀。',
+  ] as const;
+
+  // 播放器闭包状态(纯演出,不进 GameState)
+  let raidPlayerReport: RaidNightReport | null = null;
+  let raidPlayerTimer: number | undefined;
+  let raidBossIndex = 0;
+  let raidHp = 100;
+  let raidTick = 0;
+  let raidFinished = false;
+  let raidDots: HTMLSpanElement[] = [];
+  let raidHpFillEl: HTMLDivElement | null = null;
+  let raidHpTextEl: HTMLSpanElement | null = null;
+  let raidBossNameEl: HTMLSpanElement | null = null;
+  let raidBossGateEl: HTMLSpanElement | null = null;
+  let raidLogEl: HTMLUListElement | null = null;
+  let raidSummaryEl: HTMLDivElement | null = null;
+
+  /** 团本夜面板(日程页):赛前安排预览 + 最近一夜的直播回放。 */
+  function renderRaidNight(state: GameState): void {
+    const night = nextRaidNight(state);
+    if (night === undefined) {
+      raidNightSubEl.textContent = '未开团';
+      raidPlanEl.replaceChildren(
+        el(
+          'p',
+          'empty-hint',
+          '通过团队检查后在「编成」页开团 —— 团本夜在每周边界打响,按首领顺序结算,全程只观赛。',
+        ),
+      );
+    } else {
+      const raid = RAID_BY_ID.get(state.raidPlan?.raidId ?? '');
+      raidNightSubEl.textContent = raid !== undefined ? `${formatGameStamp(night.atGameMinutes)} 开打` : '安排失效';
+      if (raid === undefined) {
+        raidPlanEl.replaceChildren(
+          el('p', 'empty-hint', '开团安排指向的团本已不在内容表,团本夜将自动撤销。'),
+        );
+      } else {
+        const card = el('div', 'raid-plan-card');
+        card.append(el('p', 'raid-plan-title', `已开团:「${raid.name}」—— ${raid.bosses.length} 名首领,按顺序结算`));
+        card.append(
+          el(
+            'p',
+            'raid-plan-stamp',
+            `团本夜:${formatGameStamp(night.atGameMinutes)}(还有 ${formatGameDuration(night.remainingGameMinutes)} · 约 ${formatRealDuration(
+              gameMinutesToRealMs(night.remainingGameMinutes),
+            )} 现实时)`,
+          ),
+        );
+        card.append(el('p', 'raid-plan-note', '赛前决策:此刻还能调整编成与光环;开战后只观赛,不可介入。'));
+        raidPlanEl.replaceChildren(card);
+      }
+    }
+
+    // 直播视图:报告变化才重建并自动重播;同一报告的重渲染不打断进行中的播放
+    const report = state.lastRaidNight;
+    if (report === undefined) {
+      stopRaidPlayer();
+      raidPlayerReport = null;
+      raidLiveWrapEl.hidden = true;
+      raidLiveWrapEl.replaceChildren();
+      return;
+    }
+    if (report !== raidPlayerReport) {
+      stopRaidPlayer();
+      raidPlayerReport = report;
+      buildRaidLive(report);
+      startRaidPlayback();
+    }
+  }
+
+  /** 搭建直播视图骨架(首领血条 / 40 人点阵 / 滚动日志 / 控制)。 */
+  function buildRaidLive(report: RaidNightReport): void {
+    raidLiveWrapEl.hidden = false;
+    const card = el('div', `raid-live${report.cleared ? ' raid-live-win' : ' raid-live-wipe'}`);
+
+    const head = el('div', 'raid-live-head');
+    head.append(el('span', 'raid-live-title', `「${report.raidName}」团本夜直播`));
+    head.append(el('span', 'raid-live-stamp', formatGameStamp(report.atGameMinutes)));
+    card.append(head);
+
+    // 首领血条
+    raidBossNameEl = el('span', 'raid-boss-name', '……');
+    raidBossGateEl = el('span', 'raid-boss-gate-live', '');
+    raidHpTextEl = el('span', 'raid-hp-text', '100%');
+    const bossTop = el('div', 'raid-boss-top');
+    bossTop.append(raidBossNameEl, raidBossGateEl, raidHpTextEl);
+    raidHpFillEl = el('div', 'raid-hp-fill');
+    const hpTrack = el('div', 'raid-hp');
+    hpTrack.append(raidHpFillEl);
+    const bossBar = el('div', 'raid-boss');
+    bossBar.append(bossTop, hpTrack);
+    card.append(bossBar);
+
+    // 40 人状态点阵:一行 = 一支小队(颜色 = 职能;灰 = 倒下)
+    const dots = el('div', 'raid-dots');
+    raidDots = report.lineup.map((entry) => {
+      const dot = el('span', `raid-dot dot-${entry.role}`);
+      dot.title = `第${entry.squadOrdinal}队 · ${entry.name} · ${entry.role} · 装等${entry.itemLevel}`;
+      dots.append(dot);
+      return dot;
+    });
+    const dotsPanel = el('div', 'raid-dots-panel');
+    dotsPanel.append(
+      el('span', 'raid-dots-label', `出战 ${report.lineup.length} 人 · 平均装等 ${Math.round(report.teamItemLevel)}`),
+    );
+    dotsPanel.append(dots);
+    card.append(dotsPanel);
+
+    // 滚动战斗日志
+    const logPanel = el('div', 'raid-log-panel');
+    logPanel.append(el('span', 'raid-dots-label', '战斗日志'));
+    raidLogEl = el('ul', 'raid-log');
+    logPanel.append(raidLogEl);
+    card.append(logPanel);
+
+    // 战后小结(播放结束填入)
+    raidSummaryEl = el('div', 'raid-summary');
+    card.append(raidSummaryEl);
+
+    // 控制:重播 / 跳到结果 —— 观赛工具,不是决策
+    const controls = el('div', 'raid-live-controls');
+    controls.append(el('span', 'raid-live-hint', '赛中只观赛 —— 胜负已由装等、职能与光环写定。'));
+    const replay = el('button', 'save-btn', '重播');
+    replay.type = 'button';
+    replay.addEventListener('click', () => startRaidPlayback());
+    const skip = el('button', 'save-btn', '跳到结果');
+    skip.type = 'button';
+    skip.addEventListener('click', () => finishRaidPlayback());
+    controls.append(replay, skip);
+    card.append(controls);
+
+    raidLiveWrapEl.replaceChildren(card);
+  }
+
+  /** 开始(或重播)一段团本夜演出:回到开场,逐首领推进。 */
+  function startRaidPlayback(): void {
+    const report = raidPlayerReport;
+    if (report === null || raidLogEl === null) {
+      return;
+    }
+    stopRaidPlayer();
+    raidFinished = false;
+    raidBossIndex = 0;
+    raidTick = 0;
+    raidLogEl.replaceChildren(
+      el(
+        'li',
+        'raid-log-line raid-log-sys',
+        `团队进入「${report.raidName}」,全团 ${report.lineup.length} 人列阵,平均装等 ${Math.round(report.teamItemLevel)}。`,
+      ),
+    );
+    for (const dot of raidDots) {
+      dot.classList.remove('dot-down');
+    }
+    raidSummaryEl?.replaceChildren();
+    if (report.bosses.length === 0) {
+      finishRaidPlayback(); // 防御:空首领表直接收束(内容表校验兜底)
+      return;
+    }
+    enterRaidBoss(report.bosses[0]!);
+    raidPlayerTimer = window.setInterval(raidPlaybackTick, RAID_TICK_MS);
+  }
+
+  /** 停止演出计时器(不清画面;重播与收束共用)。 */
+  function stopRaidPlayer(): void {
+    if (raidPlayerTimer !== undefined) {
+      window.clearInterval(raidPlayerTimer);
+      raidPlayerTimer = undefined;
+    }
+  }
+
+  /** 进入一名首领的战斗段:更新血条头部与开场日志。 */
+  function enterRaidBoss(outcome: RaidBossOutcome): void {
+    raidHp = 100;
+    raidTick = 0;
+    if (raidBossNameEl !== null && raidHpTextEl !== null && raidBossGateEl !== null) {
+      raidBossNameEl.textContent = outcome.name;
+      raidBossGateEl.textContent =
+        outcome.hardGateItemLevel !== undefined
+          ? `硬门槛 装等≥${outcome.hardGateItemLevel} · ${outcome.hardGateMet ? '达标' : '未达标'}`
+          : '';
+    }
+    setRaidHp(100);
+    pushRaidLog(`首领「${outcome.name}」开打!`, 'raid-log-sys');
+    if (raidBossIndex > 0) {
+      for (const dot of raidDots) {
+        dot.classList.remove('dot-down'); // 倒下的队员被复活,重整旗鼓
+      }
+    }
+  }
+
+  /** 演出一拍:血条下坠;击杀到 0 收招,团灭停在残值。 */
+  function raidPlaybackTick(): void {
+    const report = raidPlayerReport;
+    const outcome = report?.bosses[raidBossIndex];
+    if (report === null || outcome === undefined || raidFinished) {
+      finishRaidPlayback();
+      return;
+    }
+    raidTick += 1;
+    raidHp -= RAID_HP_STEP;
+    if (raidTick % 4 === 2) {
+      pushRaidLog(RAID_FLAVOR[raidTick % RAID_FLAVOR.length] ?? '', '');
+    }
+    if (outcome.killed && raidHp <= 0) {
+      setRaidHp(0);
+      resolveRaidBoss(outcome);
+      return;
+    }
+    if (!outcome.killed && raidHp <= RAID_WIPE_FLOOR) {
+      setRaidHp(RAID_WIPE_FLOOR);
+      resolveRaidBoss(outcome);
+      return;
+    }
+    setRaidHp(Math.max(raidHp, outcome.killed ? 0 : RAID_WIPE_FLOOR));
+  }
+
+  /** 一名首领的战斗段收束:结果与掉落入日志,点阵标倒下;团灭或全通则收夜。 */
+  function resolveRaidBoss(outcome: RaidBossOutcome): void {
+    const report = raidPlayerReport;
+    if (report === null) {
+      return;
+    }
+    if (outcome.killed) {
+      const chancePercent = Math.round(outcome.successChance * 100);
+      pushRaidLog(
+        `「${outcome.name}」倒下!(胜率 ${chancePercent}%${outcome.fallen > 0 ? `,${outcome.fallen} 人倒下又被拉起` : ''})`,
+        'raid-log-win',
+      );
+      for (const drop of outcome.drops) {
+        pushRaidLog(
+          drop.equipped
+            ? `战利品:${drop.quality}·${drop.slot}(装等 ${drop.itemLevel})→ ${drop.assignedTo}(+${drop.upgradeDelta})`
+            : `战利品:${drop.quality}·${drop.slot}(装等 ${drop.itemLevel})无人可提升,分解`,
+          '',
+        );
+      }
+      // 点阵标倒下(演出:从队尾数起;下一场开打时复活)
+      for (let i = 0; i < outcome.fallen && i < raidDots.length; i++) {
+        raidDots[raidDots.length - 1 - i]?.classList.add('dot-down');
+      }
+      if (raidBossIndex + 1 < report.bosses.length) {
+        raidBossIndex += 1;
+        enterRaidBoss(report.bosses[raidBossIndex]!);
+        return;
+      }
+    } else {
+      // 团灭:全员倒下,血条停在这里
+      for (const dot of raidDots) {
+        dot.classList.add('dot-down');
+      }
+      const chancePercent = Math.round(outcome.successChance * 100);
+      pushRaidLog(`团灭于「${outcome.name}」(胜率 ${chancePercent}%)—— 血条停在了这里。`, 'raid-log-wipe');
+      pushRaidLog(
+        `团灭代价:修理金 ${report.wipe?.repairGold ?? 0} 金,全员疲劳 +${(report.wipe?.fatigue ?? 0) + RAID_SETTLEMENT.attemptFatiguePerBoss},士气 -${report.wipe?.moodHit ?? 0};无人退会,下周再战。`,
+        'raid-log-wipe',
+      );
+    }
+    finishRaidPlayback();
+  }
+
+  /** 收束演出:日志全量回放、血条定格、点阵收尾、小结填入。 */
+  function finishRaidPlayback(): void {
+    stopRaidPlayer();
+    raidFinished = true;
+    const report = raidPlayerReport;
+    if (report === null || raidLogEl === null) {
+      return;
+    }
+
+    // 日志全量回放(开场 → 逐首领开场/结果/掉落 → 收夜)
+    const lines: HTMLLIElement[] = [
+      el(
+        'li',
+        'raid-log-line raid-log-sys',
+        `团队进入「${report.raidName}」,全团 ${report.lineup.length} 人列阵,平均装等 ${Math.round(report.teamItemLevel)}。`,
+      ),
+    ];
+    report.bosses.forEach((outcome) => {
+      lines.push(el('li', 'raid-log-line raid-log-sys', `首领「${outcome.name}」开打!`));
+      if (outcome.killed) {
+        const chancePercent = Math.round(outcome.successChance * 100);
+        lines.push(
+          el(
+            'li',
+            'raid-log-line raid-log-win',
+            `「${outcome.name}」倒下!(胜率 ${chancePercent}%${outcome.fallen > 0 ? `,${outcome.fallen} 人倒下又被拉起` : ''})`,
+          ),
+        );
+        for (const drop of outcome.drops) {
+          lines.push(
+            el(
+              'li',
+              'raid-log-line',
+              drop.equipped
+                ? `战利品:${drop.quality}·${drop.slot}(装等 ${drop.itemLevel})→ ${drop.assignedTo}(+${drop.upgradeDelta})`
+                : `战利品:${drop.quality}·${drop.slot}(装等 ${drop.itemLevel})无人可提升,分解`,
+            ),
+          );
+        }
+      } else {
+        const chancePercent = Math.round(outcome.successChance * 100);
+        lines.push(el('li', 'raid-log-line raid-log-wipe', `团灭于「${outcome.name}」(胜率 ${chancePercent}%)—— 血条停在了这里。`));
+        lines.push(
+          el(
+            'li',
+            'raid-log-line raid-log-wipe',
+            `团灭代价:修理金 ${report.wipe?.repairGold ?? 0} 金,全员疲劳 +${(report.wipe?.fatigue ?? 0) + RAID_SETTLEMENT.attemptFatiguePerBoss},士气 -${report.wipe?.moodHit ?? 0};无人退会,下周再战。`,
+          ),
+        );
+      }
+    });
+    raidLogEl.replaceChildren(...lines);
+
+    // 画面定格:最后一战(全通 = 0 血;团灭 = 残值)
+    const last = report.bosses[report.bosses.length - 1]!;
+    if (raidBossNameEl !== null && raidBossGateEl !== null) {
+      raidBossNameEl.textContent = last.name;
+      raidBossGateEl.textContent =
+        last.hardGateItemLevel !== undefined
+          ? `硬门槛 装等≥${last.hardGateItemLevel} · ${last.hardGateMet ? '达标' : '未达标'}`
+          : '';
+    }
+    setRaidHp(last.killed ? 0 : RAID_WIPE_FLOOR);
+    for (const dot of raidDots) {
+      dot.classList.toggle('dot-down', !report.cleared);
+    }
+
+    // 战后小结
+    const kills = report.bosses.filter((boss) => boss.killed).length;
+    const dropCount = report.bosses.reduce((sum, boss) => sum + boss.drops.length, 0);
+    const equippedCount = report.bosses.reduce(
+      (sum, boss) => sum + boss.drops.filter((drop) => drop.equipped).length,
+      0,
+    );
+    raidSummaryEl?.replaceChildren(
+      el(
+        'p',
+        `raid-summary-line${report.cleared ? ' raid-summary-win' : ' raid-summary-wipe'}`,
+        report.cleared
+          ? `「${report.raidName}」全通:击杀 ${kills}/${report.bosses.length} 名首领,缴获 ${dropCount} 件装备(穿上 ${equippedCount} 件),士气大振。`
+          : `止步第 ${report.wipe?.bossIndex ?? report.bosses.length} 首领「${report.wipe?.bossName ?? ''}」:击杀 ${kills}/${report.bosses.length},修理金 ${report.repairGold} 金,全员疲劳与士气受损 —— 无永久损失,下周再战。`,
+      ),
+    );
+  }
+
+  /** 血条更新(百分比文本 + 宽度)。 */
+  function setRaidHp(percent: number): void {
+    const clamped = Math.max(0, Math.min(100, Math.round(percent)));
+    if (raidHpFillEl !== null) {
+      raidHpFillEl.style.width = `${clamped}%`;
+    }
+    if (raidHpTextEl !== null) {
+      raidHpTextEl.textContent = `${clamped}%`;
+    }
+  }
+
+  /** 追加一条战斗日志并滚到底(超长裁剪)。 */
+  function pushRaidLog(text: string, extraClass: string): void {
+    if (raidLogEl === null || text === '') {
+      return;
+    }
+    raidLogEl.append(el('li', `raid-log-line${extraClass === '' ? '' : ` ${extraClass}`}`, text));
+    while (raidLogEl.childElementCount > RAID_LOG_LIMIT) {
+      raidLogEl.firstElementChild?.remove();
+    }
+    raidLogEl.scrollTop = raidLogEl.scrollHeight;
   }
 
   /** 下一场结算倒计时:游戏时间/现实时间双显(派生量来自 sim/schedule,换算常量在 sim/clock)。 */

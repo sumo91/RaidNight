@@ -13,6 +13,7 @@ import {
   DUNGEON_BY_ID,
   DUNGEON_SETTLEMENT,
   DUNGEON_TIER_BY_ID,
+  type DropQualityRule,
   type DungeonDef,
 } from '../content/dungeons';
 import { GEAR_SLOTS, QUALITY_RULES, type GearSlot, type Quality } from '../content/gear';
@@ -106,6 +107,21 @@ export function rollDrops(
   // 防御:档位不在难度档表时按全白处理(内容表校验兜底,正常不会发生)
   const qualityRules =
     DUNGEON_TIER_BY_ID.get(def.tier)?.dropQuality ?? [{ quality: '白' as const, weight: 1 }];
+  return rollDropItems(rngState, qualityRules, def.dropItemLevel, count, DUNGEON_SETTLEMENT.dropJitter);
+}
+
+/**
+ * 通用掉落掷取(5 人本与团本共用;数据驱动):
+ * 每件抽取顺序固定 = 部位(8 部位等概率)→ 品质(给定权重)→ 装等扰动;
+ * 装等 = 基准 + 品质加成 ± 扰动(下限 1)。
+ */
+export function rollDropItems(
+  rngState: number,
+  qualityRules: readonly DropQualityRule[],
+  baseItemLevel: number,
+  count: number,
+  jitter: number,
+): [items: DroppedItem[], nextState: number] {
   let rng = rngState;
   const items: DroppedItem[] = [];
   for (let i = 0; i < count; i++) {
@@ -113,16 +129,12 @@ export function rollDrops(
     const [qualityRule, afterQuality] = pickWeighted(afterSlot, qualityRules);
     const bonus =
       QUALITY_RULES.find((rule) => rule.quality === qualityRule.quality)?.itemLevelBonus ?? 0;
-    const [jitter, afterJitter] = nextInt(
-      afterQuality,
-      -DUNGEON_SETTLEMENT.dropJitter,
-      DUNGEON_SETTLEMENT.dropJitter,
-    );
+    const [jitterRoll, afterJitter] = nextInt(afterQuality, -jitter, jitter);
     rng = afterJitter;
     items.push({
       slot,
       quality: qualityRule.quality,
-      itemLevel: Math.max(1, def.dropItemLevel + bonus + jitter),
+      itemLevel: Math.max(1, baseItemLevel + bonus + jitterRoll),
     });
   }
   return [items, rng];

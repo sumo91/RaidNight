@@ -8,6 +8,7 @@
  * 数据模型按「将来可同步」设计:状态含种子与随机链,基于时间戳推进、离线结算幂等。
  */
 
+import { VAULT } from '../content/economy';
 import type { GameState } from './state';
 
 /** 存档种类标记:v4 起写入封皮,导入时先验校验(不是本游戏的文件 → 拒绝)。 */
@@ -21,9 +22,11 @@ export const SAVE_KIND = 'wowidle-save';
  * - v3(T6):活动含下本(dungeon),状态新增 lastDungeonRun(可缺省);
  * - v4(T7):封皮新增 kind 标记(导出/导入文件先验校验),状态结构无变化;
  * - v5(T9):封皮新增 savedAtMs(存档落盘的现实毫秒时间戳,离线结算的起测点,
- *   ADR-0003「基于时间戳推进、离线结算幂等」;可缺省 = 0,不触发补结算)。
+ *   ADR-0003「基于时间戳推进、离线结算幂等」;可缺省 = 0,不触发补结算);
+ * - v6(T10):状态新增公会金库 vault(最小金库:余额 + 修理支出;旧档按建会
+ *   起始余额补);开团安排 raidPlan 与最近团本夜 lastRaidNight 可缺省。
  */
-export const SAVE_VERSION = 5;
+export const SAVE_VERSION = 6;
 
 /** 版本化存档封皮:v1–v3 的本机旧档没有 kind,读入时视为 legacy。 */
 export interface SaveFile {
@@ -54,6 +57,11 @@ const MIGRATIONS: Readonly<Record<number, Migration>> = {
   3: (state) => state,
   // v4 → v5:封皮级变化(新增 savedAtMs 时间基准),状态无必补字段
   4: (state) => state,
+  // v5 → v6:补最小金库(余额按建会起始值;修理支出从 0 计)
+  5: (state) => ({
+    ...state,
+    vault: state.vault ?? { gold: VAULT.startingGold, repairSpent: 0 },
+  }),
 };
 
 /** 编码:状态 → 存档文本(localStorage 值与导出文件内容共用)。 */
@@ -135,7 +143,11 @@ function looksLikeGameState(state: GameState): boolean {
     state.guild === null ||
     typeof state.guild.name !== 'string' ||
     typeof state.rosterCap !== 'number' ||
-    typeof state.reputation !== 'number'
+    typeof state.reputation !== 'number' ||
+    typeof state.vault !== 'object' ||
+    state.vault === null ||
+    typeof state.vault.gold !== 'number' ||
+    typeof state.vault.repairSpent !== 'number'
   ) {
     return false;
   }
