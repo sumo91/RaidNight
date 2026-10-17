@@ -2,8 +2,9 @@ import { DAILY_FLAVOR_POOL } from '../content/daily-flavor';
 import type { GuildCommand } from './commands';
 import { GAME_MINUTES_PER_DAY, GAME_MINUTES_PER_WEEK, gameDay, gameWeek } from './clock';
 import type { SimEvent, SimEventKind } from './events';
+import { generateApplicantPool } from './recruit';
 import { pickOne } from './rng';
-import { createInitialState, normalizeGuildName, type GameState } from './state';
+import { createInitialState, normalizeGuildName, type GameState, type Member } from './state';
 
 /**
  * 模拟门面 —— 全项目唯一测试接缝。
@@ -74,6 +75,45 @@ function applyCommand(state: GameState, command: GuildCommand, collector: EventC
       collector.push(state.clockGameMinutes, '公会', `公会更名为「${name}」。`);
       return { ...state, guild: { name } };
     }
+    case 'recruitApplicant': {
+      const applicant = state.applicants.find((a) => a.applicationId === command.applicationId);
+      if (applicant === undefined) {
+        return state; // 申请不存在(已被处理或已过期):忽略
+      }
+      if (state.members.length >= state.rosterCap) {
+        return state; // 名册已满:不可再招(验收标准 3)
+      }
+      const member: Member = { id: state.nextMemberId, isChairman: false, ...applicant.profile };
+      collector.push(state.clockGameMinutes, '招募', `「${member.name}」通过申请,正式入册。`);
+      return {
+        ...state,
+        members: [...state.members, member],
+        applicants: state.applicants.filter((a) => a.applicationId !== command.applicationId),
+        nextMemberId: state.nextMemberId + 1,
+      };
+    }
+    case 'rejectApplicant': {
+      const applicant = state.applicants.find((a) => a.applicationId === command.applicationId);
+      if (applicant === undefined) {
+        return state; // 申请不存在:忽略
+      }
+      collector.push(state.clockGameMinutes, '招募', `婉拒了「${applicant.profile.name}」的申请。`);
+      return {
+        ...state,
+        applicants: state.applicants.filter((a) => a.applicationId !== command.applicationId),
+      };
+    }
+    case 'dismissMember': {
+      const member = state.members.find((m) => m.id === command.memberId);
+      if (member === undefined || member.isChairman) {
+        return state; // 团员不存在或为会长角色:忽略(会长不能淘汰自己)
+      }
+      collector.push(state.clockGameMinutes, '招募', `「${member.name}」被淘汰出会。`);
+      return {
+        ...state,
+        members: state.members.filter((m) => m.id !== command.memberId),
+      };
+    }
   }
 }
 
@@ -84,6 +124,8 @@ function advanceClock(state: GameState, delta: number, collector: EventCollector
   const target = state.clockGameMinutes + delta;
   let cursor = state.clockGameMinutes;
   let rngState = state.rngState;
+  let applicants = state.applicants;
+  let nextApplicationId = state.nextApplicationId;
 
   // 逐个跨越的边界结算;游戏周边界必是游戏日边界(分钟数整除)。
   for (;;) {
@@ -95,16 +137,23 @@ function advanceClock(state: GameState, delta: number, collector: EventCollector
     }
     cursor = nextAt;
 
-    const [flavor, nextRng] = pickOne(rngState, DAILY_FLAVOR_POOL);
-    rngState = nextRng;
+    const [flavor, afterFlavor] = pickOne(rngState, DAILY_FLAVOR_POOL);
+    rngState = afterFlavor;
     collector.push(nextAt, '日更', `第 ${gameDay(nextAt)} 天:${flavor}`);
+
+    // 申请池每日刷新:未处理的申请全部作废,按当日声望规格重生成(GLOSSARY:申请池)
+    const pool = generateApplicantPool(rngState, state.reputation, state.members, nextApplicationId);
+    rngState = pool.rngState;
+    applicants = pool.applicants;
+    nextApplicationId = pool.nextApplicationId;
+    collector.push(nextAt, '招募', `申请池刷新:${applicants.length} 名冒险者递来了申请。`);
 
     if (nextAt === nextWeekAt) {
       collector.push(nextAt, '周更', `第 ${gameWeek(nextAt)} 周开始,团本 CD 已重置。`);
     }
   }
 
-  return { ...state, clockGameMinutes: target, rngState };
+  return { ...state, clockGameMinutes: target, rngState, applicants, nextApplicationId };
 }
 
 /** 门面对象:封装当前状态,供装配层(UI)与测试驱动。 */

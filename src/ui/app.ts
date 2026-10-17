@@ -59,7 +59,18 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
     </header>
     <main class="panes">
       <section class="pane" data-pane="roster">
-        <ul class="roster-list" data-ref="roster-list"></ul>
+        <div class="roster-browse" data-ref="roster-browse">
+          <div class="pool-panel">
+            <div class="pool-head">
+              <h2 class="section-title">申请池</h2>
+              <span class="pool-sub" data-ref="pool-sub"></span>
+            </div>
+            <p class="pool-full-hint" data-ref="pool-full-hint" hidden></p>
+            <ul class="pool-list" data-ref="pool-list"></ul>
+          </div>
+          <h2 class="section-title">在册团员</h2>
+          <ul class="roster-list" data-ref="roster-list"></ul>
+        </div>
         <div class="member-detail" data-ref="member-detail" hidden></div>
       </section>
       <section class="pane" data-pane="squads" hidden>
@@ -96,8 +107,12 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
   const memberCountEl = requireElement<HTMLSpanElement>(root, 'member-count');
   const gameClockEl = requireElement<HTMLDivElement>(root, 'game-clock');
   const feedEl = requireElement<HTMLUListElement>(root, 'event-feed');
+  const rosterBrowseEl = requireElement<HTMLDivElement>(root, 'roster-browse');
   const rosterListEl = requireElement<HTMLUListElement>(root, 'roster-list');
   const memberDetailEl = requireElement<HTMLDivElement>(root, 'member-detail');
+  const poolSubEl = requireElement<HTMLSpanElement>(root, 'pool-sub');
+  const poolFullHintEl = requireElement<HTMLParagraphElement>(root, 'pool-full-hint');
+  const poolListEl = requireElement<HTMLUListElement>(root, 'pool-list');
 
   // 页签切换:纯展示行为(哪个 pane 可见),不是业务规则
   let activeTab: TabId = 'roster';
@@ -137,9 +152,35 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
     }
   });
   memberDetailEl.addEventListener('click', (event) => {
-    if ((event.target as HTMLElement).closest('[data-action="back"]') !== null) {
+    const target = event.target as HTMLElement;
+    if (target.closest('[data-action="back"]') !== null) {
       selectedMemberId = null;
       renderRoster();
+      return;
+    }
+    // 淘汰在册团员:确认弹窗是纯展示行为,裁决权在门面(会长角色会被门面拒绝)
+    const dismiss = target.closest<HTMLButtonElement>('[data-action="dismiss"]');
+    if (dismiss !== null && !dismiss.disabled) {
+      const memberId = Number(dismiss.dataset.memberId);
+      const member = latestState?.members.find((m) => m.id === memberId);
+      if (member !== undefined && window.confirm(`确定淘汰「${member.name}」吗?此操作不可撤销。`)) {
+        options.dispatch({ command: { type: 'dismissMember', memberId }, deltaGameMinutes: 0 });
+      }
+    }
+  });
+
+  // 申请池操作:只是把「招入/拒绝」转交给门面裁决(规则一律在 sim;
+  // 名册已满时按钮只作展示性禁用,门面仍会最终拒绝越界指令)
+  poolListEl.addEventListener('click', (event) => {
+    const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-application-id]');
+    if (button === null || button.disabled) {
+      return;
+    }
+    const applicationId = Number(button.dataset.applicationId);
+    if (button.dataset.action === 'recruit') {
+      options.dispatch({ command: { type: 'recruitApplicant', applicationId }, deltaGameMinutes: 0 });
+    } else if (button.dataset.action === 'reject') {
+      options.dispatch({ command: { type: 'rejectApplicant', applicationId }, deltaGameMinutes: 0 });
     }
   });
 
@@ -148,8 +189,9 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
   function render(state: GameState, newEvents: readonly SimEvent[]): void {
     latestState = state;
     guildNameEl.textContent = state.guild.name;
-    memberCountEl.textContent = `在册团员 ${state.members.length} 人`;
+    memberCountEl.textContent = `在册 ${state.members.length}/${state.rosterCap} 人`;
     gameClockEl.textContent = formatGameClock(state.clockGameMinutes);
+    renderPool(state);
     renderRoster();
 
     if (newEvents.length > 0) {
@@ -173,7 +215,7 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
     }
   }
 
-  /** 名册区渲染:无选中 → 列表;有选中 → 详情(成员不存在时回退列表)。 */
+  /** 名册区渲染:无选中 → 申请池 + 列表;有选中 → 详情(成员不存在时回退列表)。 */
   function renderRoster(): void {
     const state = latestState;
     if (state === null) {
@@ -186,20 +228,79 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
     if (selected === undefined) {
       selectedMemberId = null;
       memberDetailEl.hidden = true;
-      rosterListEl.hidden = false;
+      rosterBrowseEl.hidden = false;
       renderRosterList(state.members);
     } else {
-      rosterListEl.hidden = true;
+      rosterBrowseEl.hidden = true;
       memberDetailEl.hidden = false;
       renderMemberDetail(selected);
     }
+  }
+
+  /** 申请池渲染:每张申请卡只展示画像数据,「招入/拒绝」交给门面裁决。 */
+  function renderPool(state: GameState): void {
+    const full = state.members.length >= state.rosterCap;
+    poolSubEl.textContent = `${state.applicants.length} 份申请 · 每游戏日按声望刷新`;
+    poolFullHintEl.hidden = !full;
+    if (full) {
+      poolFullHintEl.textContent = `名册已满(${state.members.length}/${state.rosterCap}),淘汰团员可腾出名额。`;
+    }
+
+    if (state.applicants.length === 0) {
+      poolListEl.replaceChildren(
+        el('li', 'pool-empty', '今日的申请都已处理 —— 申请池每游戏日刷新。'),
+      );
+      return;
+    }
+    poolListEl.replaceChildren(
+      ...state.applicants.map((applicant) => {
+        const profile = applicant.profile;
+        const cls = CLASS_BY_ID.get(profile.classId);
+        const spec = cls?.specs.find((s) => s.id === profile.specId);
+        const tier = SKILL_TIER_BY_ID.get(profile.skillTierId);
+
+        const top = el('div', 'row-top');
+        const nameWrap = el('div', 'row-name');
+        nameWrap.append(el('span', 'member-name', profile.name));
+        top.append(nameWrap, el('span', 'row-summary', `Lv${profile.level} · 装等${averageItemLevel(profile)}`));
+
+        const bottom = el('div', 'row-bottom');
+        bottom.append(
+          el(
+            'span',
+            'row-class',
+            `${cls?.name ?? '?'} · ${spec?.name ?? '?'}${spec ? ` · ${spec.role}` : ''} · ${tier?.name ?? '?'}`,
+          ),
+        );
+        bottom.append(el('span', 'row-vitals', `忠诚${profile.loyalty} 心情${profile.mood}`));
+
+        const actions = el('div', 'pool-actions');
+        const recruit = el('button', 'pool-btn pool-btn-recruit', '招入');
+        recruit.type = 'button';
+        recruit.dataset.action = 'recruit';
+        recruit.dataset.applicationId = String(applicant.applicationId);
+        if (full) {
+          recruit.disabled = true; // 展示性禁用:真实裁决仍在门面
+          recruit.title = '名册已满';
+        }
+        const reject = el('button', 'pool-btn pool-btn-reject', '拒绝');
+        reject.type = 'button';
+        reject.dataset.action = 'reject';
+        reject.dataset.applicationId = String(applicant.applicationId);
+        actions.append(recruit, reject);
+
+        const card = el('li', 'pool-card');
+        card.append(top, bottom, actions);
+        return card;
+      }),
+    );
   }
 
   /** 名册列表:职业 / 等级 / 装等摘要(验收标准 1)。 */
   function renderRosterList(members: readonly Member[]): void {
     if (members.length === 0) {
       rosterListEl.replaceChildren(
-        el('li', 'empty-hint', '名册空空如也 —— 招募系统在后续工单开放。'),
+        el('li', 'empty-hint', '名册空空如也 —— 会长角色不可淘汰。'),
       );
       return;
     }
@@ -245,10 +346,21 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
 
     const frag = document.createDocumentFragment();
 
+    const topRow = el('div', 'detail-top');
     const back = el('button', 'detail-back', '← 返回名册');
     back.type = 'button';
     back.dataset.action = 'back';
-    frag.append(back);
+    topRow.append(back);
+
+    // 淘汰入口:仅普通团员显示(会长角色不可淘汰,规则在门面)
+    if (!member.isChairman) {
+      const dismiss = el('button', 'detail-dismiss', '淘汰出会');
+      dismiss.type = 'button';
+      dismiss.dataset.action = 'dismiss';
+      dismiss.dataset.memberId = String(member.id);
+      topRow.append(dismiss);
+    }
+    frag.append(topRow);
 
     const title = el('div', 'detail-title');
     const nameWrap = el('h3', 'detail-name');

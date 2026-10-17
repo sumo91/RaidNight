@@ -3,18 +3,19 @@ import { CLASSES } from '../content/classes';
 import { GEAR_SLOTS, QUALITY_RULES } from '../content/gear';
 import { FAMILY_NAME_POOL, GIVEN_NAME_POOL } from '../content/names';
 import { ROSTER_GEN, type Range } from '../content/roster-gen';
-import { SKILL_TIERS } from '../content/skill-tiers';
+import { SKILL_TIERS, type SkillTierDef } from '../content/skill-tiers';
 import { TRAIT_POOL } from '../content/traits';
 import { nextInt, pickOne, pickWeighted } from './rng';
-import type { AttendanceProfile, GearItem, Member } from './state';
+import type { AttendanceProfile, GearItem, Member, MemberProfile } from './state';
 
 /**
- * 建会名册生成:纯函数、只走注入的种子随机链(src/sim/rng.ts),
+ * 团员画像生成:纯函数、只走注入的种子随机链(src/sim/rng.ts),
  * 规则数值全部来自 src/content/(数据驱动,可配置)。
  *
  * 抽取顺序固定:姓名 → 职业 → 专精 → 等级 → 8 部位装备 → 三维 → 出勤画像
  * → 性格标签个数与内容 → 技艺评级;任何一步都消费并传递随机链状态,
  * 因此「同一种子 + 同一配置 ⇒ 同一批团员」。
+ * 建会名册与申请池共用本模块;申请池经 options 覆盖等级区间与技艺权重。
  */
 
 /** 生成结果:名册 + 生成结束后的随机链状态 + 下一个团员 id。 */
@@ -30,30 +31,48 @@ export function generateFoundingRoster(seed: number): FoundingRoster {
   const usedNames = new Set<string>();
 
   // 会长角色最先入册(id 1)
-  const [chairman, afterChairman] = generateMember(rng, 1, { isChairman: true, usedNames });
-  rng = afterChairman;
-  members.push(chairman);
-  usedNames.add(chairman.name);
+  const chairman = generateMember(rng, 1, { isChairman: true, usedNames });
+  rng = chairman[1];
+  members.push(chairman[0]);
+  usedNames.add(chairman[0].name);
 
   for (let i = 0; i < ROSTER_GEN.foundingMemberCount; i++) {
     const id = members.length + 1;
-    const [member, nextRng] = generateMember(rng, id, { isChairman: false, usedNames });
-    rng = nextRng;
-    members.push(member);
-    usedNames.add(member.name);
+    const member = generateMember(rng, id, { isChairman: false, usedNames });
+    rng = member[1];
+    members.push(member[0]);
+    usedNames.add(member[0].name);
   }
 
   return { members, rngState: rng, nextMemberId: members.length + 1 };
 }
 
-/** 单个团员的生成选项。 */
-interface GenerateOptions {
+/** 画像生成选项。 */
+export interface GenerateProfileOptions {
   readonly isChairman: boolean;
   /** 同批已用姓名(去重) */
   readonly usedNames: ReadonlySet<string>;
+  /** 等级区间覆盖(申请池规格用;缺省取 ROSTER_GEN 配置) */
+  readonly levelRange?: Range;
+  /** 技艺档权重覆盖(申请池规格用;缺省取 SKILL_TIERS 基础权重) */
+  readonly skillTiers?: readonly SkillTierDef[];
 }
 
-function generateMember(rng: number, id: number, options: GenerateOptions): [Member, number] {
+/** 生成一名在册团员(id 由名册分配)。 */
+function generateMember(
+  rng: number,
+  id: number,
+  options: GenerateProfileOptions,
+): [Member, number] {
+  const [profile, nextState] = generateMemberProfile(rng, options);
+  return [{ id, isChairman: options.isChairman, ...profile }, nextState];
+}
+
+/** 生成一份团员画像:在册团员与申请人共用。 */
+export function generateMemberProfile(
+  rng: number,
+  options: GenerateProfileOptions,
+): [MemberProfile, number] {
   const { isChairman } = options;
 
   // 1) 姓名(同批去重;组合空间远大于名册规模,重试用尽后接受重名)
@@ -66,10 +85,11 @@ function generateMember(rng: number, id: number, options: GenerateOptions): [Mem
   const [spec, afterSpec] = pickOne(state, cls.specs);
   state = afterSpec;
 
-  // 3) 等级:会长取固定值,普通团员取区间随机
-  const levelRange: Range = isChairman
+  // 3) 等级:会长取固定值,其余按区间随机(申请池可覆盖区间)
+  const defaultLevelRange: Range = isChairman
     ? [ROSTER_GEN.chairman.level, ROSTER_GEN.chairman.level]
     : ROSTER_GEN.member.levelRange;
+  const levelRange = options.levelRange ?? defaultLevelRange;
   const [level, afterLevel] = nextInt(state, levelRange[0], levelRange[1]);
   state = afterLevel;
 
@@ -104,15 +124,13 @@ function generateMember(rng: number, id: number, options: GenerateOptions): [Mem
   const [traits, afterTraits] = generateTraits(state);
   state = afterTraits;
 
-  // 8) 技艺评级(按档位权重)
-  const [tier, afterTier] = pickWeighted(state, SKILL_TIERS);
+  // 8) 技艺评级(按档位权重;申请池可换声望驱动的重加权档位表)
+  const [tier, afterTier] = pickWeighted(state, options.skillTiers ?? SKILL_TIERS);
   state = afterTier;
 
   return [
     {
-      id,
       name,
-      isChairman,
       classId: cls.id,
       specId: spec.id,
       level,

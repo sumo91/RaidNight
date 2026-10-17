@@ -1,18 +1,15 @@
 import { GUILD_NAME_MAX_LENGTH } from './commands';
 import { generateFoundingRoster } from './member-gen';
+import { generateApplicantPool } from './recruit';
+import { RECRUIT } from '../content/recruit';
 import type { GearSlot, Quality } from '../content/gear';
 
 /**
- * 团员:名册中的一名在册成员(GLOSSARY)。
- * 全维度:职业 + 专精、等级、8 部位装备(装等由派生函数计算)、
- * 三维状态(心情/忠诚/疲劳)、出勤画像、性格标签(1–2)、技艺评级。
- * 引用内容表处只存 id(数据驱动:改文案不动存档)。
+ * 团员画像:除 id 与会长标记外的全部团员维度。
+ * 在册团员(Member)与申请人(Applicant)共用 —— 申请人招入时画像原样转正。
  */
-export interface Member {
-  readonly id: number;
+export interface MemberProfile {
   readonly name: string;
-  /** 是否会长角色(会长在名册中的自有角色,GLOSSARY) */
-  readonly isChairman: boolean;
   readonly classId: string;
   readonly specId: string;
   readonly level: number;
@@ -30,6 +27,27 @@ export interface Member {
   readonly traits: readonly string[];
   /** 技艺评级档位 id */
   readonly skillTierId: string;
+}
+
+/**
+ * 团员:名册中的一名在册成员(GLOSSARY)。
+ * 全维度见 MemberProfile;引用内容表处只存 id(数据驱动:改文案不动存档)。
+ */
+export interface Member extends MemberProfile {
+  readonly id: number;
+  /** 是否会长角色(会长在名册中的自有角色,GLOSSARY) */
+  readonly isChairman: boolean;
+}
+
+/**
+ * 申请:申请池中的一份求职申请(GLOSSARY:申请池)。
+ * 画像在每日刷新时按池子规格预生成;招入时才分配团员 id。
+ */
+export interface Applicant {
+  /** 申请编号(与团员 id 相互独立的空间) */
+  readonly applicationId: number;
+  /** 申请人完整画像 */
+  readonly profile: MemberProfile;
 }
 
 /** 单件装备:部位 + 品质 + 装等(物品表见后续装备工单)。 */
@@ -62,10 +80,21 @@ export interface GameState {
   /** 游戏时钟:自建会起累计的游戏分钟 */
   readonly clockGameMinutes: number;
   readonly guild: GuildInfo;
-  /** 名册:建会时生成(会长角色 + 初始团员),后续工单经指令增减 */
+  /**
+   * 声望(0-100):驱动申请池的数量与质量(GLOSSARY:声望等级)。
+   * 本票为桩值(T12 接声望系统真值),只读不涨。
+   */
+  readonly reputation: number;
+  /** 名册上限:自 6 人起步;扩容与声望联动在 T12。 */
+  readonly rosterCap: number;
+  /** 名册:建会时生成(会长角色 + 初始团员),经招募/淘汰指令增减 */
   readonly members: readonly Member[];
   /** 下一个团员 id(生成与招募共用) */
   readonly nextMemberId: number;
+  /** 申请池:每游戏日刷新(含建会当日的初始池) */
+  readonly applicants: readonly Applicant[];
+  /** 下一个申请编号 */
+  readonly nextApplicationId: number;
   /** 下一个事件序号 */
   readonly nextEventSeq: number;
 }
@@ -74,19 +103,26 @@ export const DEFAULT_GUILD_NAME = '星盾公会';
 
 /**
  * 初始状态:建会时刻,游戏时间为 0。
- * 名册在此时生成:同一种子 ⇒ 同一批团员(生成走种子随机链,链状态存回 GameState)。
+ * 名册与当日申请池在此时生成:同一种子 ⇒ 同一批团员与同一池申请
+ * (生成走种子随机链,链状态存回 GameState)。
  */
 export function createInitialState(seed: number, guildName?: string): GameState {
   const seed32 = seed | 0;
   const name = guildName === undefined ? DEFAULT_GUILD_NAME : normalizeGuildName(guildName);
   const roster = generateFoundingRoster(seed32);
+  // 建会当日就有申请池可浏览(每日刷新从下一个游戏日边界开始)
+  const pool = generateApplicantPool(roster.rngState, RECRUIT.stubReputation, roster.members, 1);
   return {
     seed: seed32,
-    rngState: roster.rngState,
+    rngState: pool.rngState,
     clockGameMinutes: 0,
     guild: { name: name ?? DEFAULT_GUILD_NAME },
+    reputation: RECRUIT.stubReputation,
+    rosterCap: RECRUIT.baseRosterCap,
     members: roster.members,
     nextMemberId: roster.nextMemberId,
+    applicants: pool.applicants,
+    nextApplicationId: pool.nextApplicationId,
     nextEventSeq: 1,
   };
 }

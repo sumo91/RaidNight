@@ -6,7 +6,13 @@
 
 export type GuildCommand =
   /** 公会更名 */
-  | { readonly type: 'renameGuild'; readonly name: string };
+  | { readonly type: 'renameGuild'; readonly name: string }
+  /** 招入申请(申请池 → 名册) */
+  | { readonly type: 'recruitApplicant'; readonly applicationId: number }
+  /** 拒绝申请(移出申请池) */
+  | { readonly type: 'rejectApplicant'; readonly applicationId: number }
+  /** 淘汰在册团员(移出名册;会长角色不可淘汰) */
+  | { readonly type: 'dismissMember'; readonly memberId: number };
 
 /** 公会名长度上限(规则只存在于 sim,UI 不做校验)。 */
 export const GUILD_NAME_MAX_LENGTH = 24;

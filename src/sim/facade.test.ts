@@ -84,7 +84,8 @@ describe('模拟门面:指令与时间跳变(验收标准 3)', () => {
     expect(minuteOfDay(finalState.clockGameMinutes)).toBe(196); // 03:16
 
     // 事件日志:数量、顺序、内容
-    expect(events).toHaveLength(30); // 2 条公会 + 26 条日更(第2..第27天中实际跨26个日界)…见下方细分
+    // (T3 起,每个跨过的日界 = 日更 + 申请池刷新两条事件)
+    expect(events).toHaveLength(55); // 2 条公会 + 25 条日更 + 25 条招募 + 3 条周更
     expect(events[0]?.kind).toBe('公会');
     expect(events[0]?.text).toBe('公会更名为「星盾远征军」。');
     expect(events.filter((e) => e.kind === '公会')).toHaveLength(2); // 空名指令被忽略
@@ -97,7 +98,8 @@ describe('模拟门面:指令与时间跳变(验收标准 3)', () => {
     const dayEvents = events.filter((e) => e.kind === '日更');
     expect(dayEvents).toHaveLength(25); // 第 2..26 天
     expect(dayEvents.at(-1)?.text.startsWith('第 26 天:')).toBe(true);
-    expect(events.at(-1)?.kind).toBe('日更'); // 最后一步:指令先生效,时间推进在后
+    expect(events.filter((e) => e.kind === '招募')).toHaveLength(25); // 每个日界刷新一次申请池
+    expect(events.at(-1)?.kind).toBe('招募'); // 日界结算顺序:日更 → 申请池刷新 →(周更)
 
     // 序号连续且递增
     expect(events.map((e) => e.seq)).toEqual(Array.from({ length: events.length }, (_, i) => i + 1));
@@ -133,16 +135,16 @@ describe('模拟门面:指令与时间跳变(验收标准 3)', () => {
 });
 
 describe('游戏时钟:日/周边界结算', () => {
-  it('推进到周边界前一刻仍是第 1 周;跨过边界产生日更 + 周更', () => {
+  it('推进到周边界前一刻仍是第 1 周;跨过边界产生日更 + 申请池刷新 + 周更', () => {
     const facade = new SimulationFacade(21, '星盾公会');
     const before = facade.dispatch({ deltaGameMinutes: GAME_MINUTES_PER_WEEK - 1 });
     expect(gameWeek(facade.state.clockGameMinutes)).toBe(1);
-    expect(before.events.every((e) => e.kind === '日更')).toBe(true);
+    expect(before.events.every((e) => e.kind === '日更' || e.kind === '招募')).toBe(true);
 
     const crossing = facade.dispatch({ deltaGameMinutes: 1 });
     expect(gameWeek(facade.state.clockGameMinutes)).toBe(2);
-    expect(crossing.events.map((e) => e.kind)).toEqual(['日更', '周更']);
-    expect(crossing.events[1]?.text).toBe('第 2 周开始,团本 CD 已重置。');
+    expect(crossing.events.map((e) => e.kind)).toEqual(['日更', '招募', '周更']);
+    expect(crossing.events[2]?.text).toBe('第 2 周开始,团本 CD 已重置。');
     // 同一周边界上,事件时刻一致
     expect(new Set(crossing.events.map((e) => e.atGameMinutes)).size).toBe(1);
   });
