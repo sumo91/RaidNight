@@ -1,0 +1,22 @@
+[package]
+name = "wowidle"
+version = "0.1.0"
+description = "WowIdle(工作名)—— 魔兽风公会会长放置模拟(桌面壳)"
+edition = "2021"
+
+# T19 小组件模式:桌面壳只做窗口与属主仲裁,模拟本体在 Web 侧(src/),
+# 壳内不承载任何游戏规则(ADR-0001:单一 Web 代码库 + Tauri 打包)。
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# 常驻小组件形态:发布构建体积与内存优先
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

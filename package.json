@@ -11,6 +11,7 @@
     "test": "vitest run --configLoader runner",
     "test:watch": "vitest --configLoader runner",
     "gen:art": "vite-node --configLoader runner scripts/gen-art.ts",
+    "gen:icon": "vite-node --configLoader runner scripts/gen-app-icon.ts",
     "sim:round": "vite-node --configLoader runner scripts/sim-round.ts"
   },
   "devDependencies": {
