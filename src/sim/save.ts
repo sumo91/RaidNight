@@ -37,8 +37,11 @@ export const SAVE_KIND = 'wowidle-save';
  * - v9(T13):虚拟服务器 —— 状态新增 world(NPC 公会群 + 全服新闻 + 服务器
  *   首杀 + 橡皮筋锚);旧档按种子补生成公会群,玩家已得的本会首杀按服务器
  *   首杀结转(署玩家公会名),锚取当前进度与新快照(补档当周不算停滞)。
+ * - v10(T14):开荒决策面 —— 开团安排 raidPlan 新增可缺省的赛前决策
+ *   tactics(消耗品预算档 / 已启用的世界 Buff / 编成微调阵形),团本夜报告
+ *   lastRaidNight 同步可带生效快照;全部可缺省,旧档不迁移即兼容。
  */
-export const SAVE_VERSION = 9;
+export const SAVE_VERSION = 10;
 
 /** 版本化存档封皮:v1–v3 的本机旧档没有 kind,读入时视为 legacy。 */
 export interface SaveFile {
@@ -148,6 +151,8 @@ const MIGRATIONS: Readonly<Record<number, Migration>> = {
         atGameMinutes: typeof state.clockGameMinutes === 'number' ? state.clockGameMinutes : 0,
       }),
   }),
+  // v9 → v10:开荒决策面(tactics 全部可缺省,旧档即兼容;恒等迁移仅记版次)
+  9: (state) => state,
 };
 
 /** 编码:状态 → 存档文本(localStorage 值与导出文件内容共用)。 */

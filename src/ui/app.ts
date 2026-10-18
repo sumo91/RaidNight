@@ -10,6 +10,14 @@ import {
 import type { Quality } from '../content/gear';
 import { LEVELING } from '../content/maps';
 import { RAID_BY_ID, RAID_SETTLEMENT } from '../content/raids';
+import {
+  CONSUMABLE_TIERS,
+  RAID_STANCES,
+  WORLD_BUFFS,
+  type ConsumableTierId,
+  type RaidStanceId,
+  type WorldBuffId,
+} from '../content/raid-tactics';
 import { RENOWN_RUNG_COUNT, RENOWN_TIERS } from '../content/reputation';
 import { SKILL_TIER_BY_ID } from '../content/skill-tiers';
 import { TRAIT_BY_ID } from '../content/traits';
@@ -21,7 +29,7 @@ import { squadCompositions, teamCheck, unassignedMembers } from '../sim/comp';
 import { dungeonStatuses, squadDungeon, squadDungeonReadiness } from '../sim/dungeon';
 import { externalActivityStatuses, squadExternalActivity } from '../sim/economy';
 import { levelingMapStatuses, squadLevelingMap, xpToNextLevel } from '../sim/leveling';
-import { raidStatuses } from '../sim/raid';
+import { raidStatuses, armedWorldBuffs, stancePowerPreviews } from '../sim/raid';
 import {
   hallDeedsLine,
   renownLabel,
@@ -663,6 +671,31 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
     }
   });
 
+  // 开荒决策面操作(T14,日程页):转交门面裁决 —— 拨款是否付得起、是否来得及
+  // 一律在 sim;此处只做展示性禁用与价格标注
+  raidPlanEl.addEventListener('click', (event) => {
+    const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-action]');
+    if (button === null || button.disabled) {
+      return;
+    }
+    if (button.dataset.action === 'set-consumable' && button.dataset.tier !== undefined) {
+      options.dispatch({
+        command: { type: 'setConsumableBudget', tier: button.dataset.tier as ConsumableTierId },
+        deltaGameMinutes: 0,
+      });
+    } else if (button.dataset.action === 'arm-world-buff' && button.dataset.buffId !== undefined) {
+      options.dispatch({
+        command: { type: 'armWorldBuff', buffId: button.dataset.buffId as WorldBuffId },
+        deltaGameMinutes: 0,
+      });
+    } else if (button.dataset.action === 'set-stance' && button.dataset.stance !== undefined) {
+      options.dispatch({
+        command: { type: 'setRaidStance', stance: button.dataset.stance as RaidStanceId },
+        deltaGameMinutes: 0,
+      });
+    }
+  });
+
   // 申请池操作:只是把「招入/拒绝」转交给门面裁决(规则一律在 sim;
   // 名册已满时按钮只作展示性禁用,门面仍会最终拒绝越界指令)
   poolListEl.addEventListener('click', (event) => {
@@ -1285,6 +1318,9 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
             : '已开团:安排的团本已不在内容表,团本夜将自动撤销。',
         ),
       );
+      wrap.append(
+        el('p', 'raid-plan-hint', '赛前决策(消耗品预算 / 世界 Buff / 编成微调)在「日程」页的开荒决策面。'),
+      );
     } else {
       wrap.append(el('p', 'raid-plan-line raid-plan-idle', '本周未开团 —— 团队检查通过后即可安排团本夜。'));
     }
@@ -1420,8 +1456,9 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
             )} 现实时)`,
           ),
         );
-        card.append(el('p', 'raid-plan-note', '赛前决策:此刻还能调整编成与光环;开战后只观赛,不可介入。'));
-        raidPlanEl.replaceChildren(card);
+        card.append(el('p', 'raid-plan-note', '开荒决策面在下方 —— 消耗品、世界 Buff 与阵形只对当夜生效;开战后只观赛,不可介入。'));
+        // 开荒决策面(T14):三项赛前决策,全部转交门面裁决(规则与就绪判定在 sim)
+        raidPlanEl.replaceChildren(card, renderTacticPanel(state));
       }
     }
 
@@ -1442,9 +1479,129 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
     }
   }
 
+  // ———— 开荒决策面(T14,DESIGN):团本夜前的三项赛前决策 ————
+  // 只读状态与 sim 派生量(armedWorldBuffs 的就绪判定、stancePowerPreviews 的
+  // 战力预览);一切规则(拨款、筹备时长、取舍系数)在 sim,此处只渲染与派发。
+
+  /** 决策面骨架:标题 + 三个决策区(消耗品预算 / 世界 Buff / 编成微调)。 */
+  function renderTacticPanel(state: GameState): HTMLElement {
+    const plan = state.raidPlan!;
+    const wrap = el('div', 'tactic-panel');
+    const head = el('div', 'pool-head');
+    head.append(el('h3', 'tactic-title', '开荒决策面'));
+    head.append(el('span', 'pool-sub', `金库 ${state.vault.gold} 金 · 三项决策只对当夜生效,夜结束即清空`));
+    wrap.append(head);
+
+    // ① 消耗品预算:金库拨款买药水合剂(拨款在设定时即扣,换档再全额拨款)
+    const consumableSection = el('div', 'tactic-section');
+    const consumableHead = el('div', 'tactic-section-head');
+    consumableHead.append(el('span', 'tactic-section-title', '① 消耗品预算'));
+    consumableHead.append(el('span', 'tactic-section-note', '拨款买药水合剂,当夜全团战力提升;换档再全额拨款、此前不退'));
+    consumableSection.append(consumableHead);
+    const consumableOptions = el('div', 'tactic-options');
+    for (const tier of CONSUMABLE_TIERS) {
+      const current = plan.tactics?.consumableTier === tier.id;
+      const option = current
+        ? el('div', 'tactic-opt tactic-opt-current')
+        : el('button', 'tactic-opt');
+      if (!current) {
+        (option as HTMLButtonElement).type = 'button';
+        option.dataset.action = 'set-consumable';
+        option.dataset.tier = tier.id;
+        if (state.vault.gold < tier.costGold) {
+          (option as HTMLButtonElement).disabled = true; // 展示性禁用:真实裁决仍在门面
+          option.title = `金库余额不足(需 ${tier.costGold} 金)`;
+        }
+      }
+      const label = el('span', 'tactic-opt-name', current ? `${tier.name}(已采购)` : tier.name);
+      label.title = tier.tagline;
+      option.append(label);
+      option.append(el('span', 'tactic-opt-meta', `${tier.costGold} 金 · 战力 +${tier.powerBonusPercent}%`));
+      consumableOptions.append(option);
+    }
+    consumableSection.append(consumableOptions);
+    wrap.append(consumableSection);
+
+    // ② 世界 Buff:拨款 + 筹备时长(距团本夜不足筹备时长 ⇒ 当夜无效,就绪判定在 sim)
+    const buffSection = el('div', 'tactic-section');
+    const buffHead = el('div', 'tactic-section-head');
+    buffHead.append(el('span', 'tactic-section-title', '② 世界 Buff'));
+    buffHead.append(el('span', 'tactic-section-note', '拨款并启程筹备:距团本夜备妥才生效,启用越早越稳'));
+    buffSection.append(buffHead);
+    const armed = armedWorldBuffs(state);
+    const buffOptions = el('div', 'tactic-options');
+    for (const def of WORLD_BUFFS) {
+      const armedEntry = armed.find((entry) => entry.def.id === def.id);
+      if (armedEntry === undefined) {
+        const option = el('button', 'tactic-opt');
+        option.type = 'button';
+        option.dataset.action = 'arm-world-buff';
+        option.dataset.buffId = def.id;
+        if (state.vault.gold < def.costGold) {
+          option.disabled = true; // 展示性禁用:真实裁决仍在门面
+          option.title = `金库余额不足(需 ${def.costGold} 金)`;
+        }
+        const label = el('span', 'tactic-opt-name', def.name);
+        label.title = def.description;
+        option.append(label);
+        option.append(
+          el('span', 'tactic-opt-meta', `${def.costGold} 金 · 筹备 ${def.prepGameDays} 日 · 战力 +${def.powerBonusPercent}%`),
+        );
+        buffOptions.append(option);
+      } else {
+        const row = el('div', `tactic-state${armedEntry.readyByNight ? ' tactic-state-ready' : ' tactic-state-late'}`);
+        const label = el('span', 'tactic-opt-name', `${def.name}(筹备中)`);
+        label.title = def.description;
+        row.append(label);
+        row.append(
+          el(
+            'span',
+            'tactic-opt-meta',
+            armedEntry.readyByNight
+              ? `已备妥 · 战力 +${def.powerBonusPercent}%`
+              : `来不及(需 ${def.prepGameDays} 日,仅剩 ${Math.floor(armedEntry.leadGameMinutes / GAME_MINUTES_PER_DAY)} 日)`,
+          ),
+        );
+        buffOptions.append(row);
+      }
+    }
+    buffSection.append(buffOptions);
+    wrap.append(buffSection);
+
+    // ③ 编成微调:阵形取舍(职能分 × 光环覆盖的系数;战力预览来自 sim 派生量)
+    const stanceSection = el('div', 'tactic-section');
+    const stanceHead = el('div', 'tactic-section-head');
+    stanceHead.append(el('span', 'tactic-section-title', '③ 编成微调'));
+    stanceHead.append(el('span', 'tactic-section-note', '阵形取舍:有得必有失 —— 按当前编成挑最赚的那一个'));
+    stanceSection.append(stanceHead);
+    const previews = stancePowerPreviews(state.members, state.squads);
+    const baseline = previews.find((entry) => entry.stanceId === 'balanced')?.power ?? 0;
+    const stanceOptions = el('div', 'tactic-options');
+    for (const def of RAID_STANCES) {
+      const preview = previews.find((entry) => entry.stanceId === def.id);
+      const current = plan.tactics?.stance === def.id || (plan.tactics?.stance === undefined && def.id === 'balanced');
+      const option = current ? el('div', 'tactic-opt tactic-opt-current') : el('button', 'tactic-opt');
+      if (!current) {
+        (option as HTMLButtonElement).type = 'button';
+        option.dataset.action = 'set-stance';
+        option.dataset.stance = def.id;
+      }
+      const label = el('span', 'tactic-opt-name', current ? `${def.name}(现行)` : def.name);
+      label.title = def.description;
+      option.append(label);
+      const delta = preview === undefined ? 0 : preview.power - baseline;
+      const deltaText = def.id === 'balanced' ? '基线' : `${delta >= 0 ? '+' : ''}${Math.round(delta)}`;
+      option.append(el('span', 'tactic-opt-meta', `战力 ≈${Math.round(preview?.power ?? 0)}(${deltaText})`));
+      stanceOptions.append(option);
+    }
+    stanceSection.append(stanceOptions);
+    wrap.append(stanceSection);
+
+    return wrap;
+  }
+
   /** 搭建直播视图骨架(首领血条 / 40 人点阵 / 滚动日志 / 控制)。 */
-  function buildRaidLive(report: RaidNightReport): void {
-    raidLiveWrapEl.hidden = false;
+  function buildRaidLive(report: RaidNightReport): void {    raidLiveWrapEl.hidden = false;
     const card = el('div', `raid-live${report.cleared ? ' raid-live-win' : ' raid-live-wipe'}`);
 
     const head = el('div', 'raid-live-head');
@@ -1700,14 +1857,14 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
       dot.classList.toggle('dot-down', !report.cleared);
     }
 
-    // 战后小结
+    // 战后小结(含当夜决策的生效快照,数据来自报告;未做决策时不显示决策行)
     const kills = report.bosses.filter((boss) => boss.killed).length;
     const dropCount = report.bosses.reduce((sum, boss) => sum + boss.drops.length, 0);
     const equippedCount = report.bosses.reduce(
       (sum, boss) => sum + boss.drops.filter((drop) => drop.equipped).length,
       0,
     );
-    raidSummaryEl?.replaceChildren(
+    const summaryLines: HTMLElement[] = [
       el(
         'p',
         `raid-summary-line${report.cleared ? ' raid-summary-win' : ' raid-summary-wipe'}`,
@@ -1715,7 +1872,29 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
           ? `「${report.raidName}」全通:击杀 ${kills}/${report.bosses.length} 名首领,缴获 ${dropCount} 件装备(穿上 ${equippedCount} 件),士气大振。`
           : `止步第 ${report.wipe?.bossIndex ?? report.bosses.length} 首领「${report.wipe?.bossName ?? ''}」:击杀 ${kills}/${report.bosses.length},修理金 ${report.repairGold} 金,全员疲劳与士气受损 —— 无永久损失,下周再战。`,
       ),
-    );
+    ];
+    if (report.tactics !== undefined) {
+      summaryLines.push(el('p', 'raid-summary-line raid-summary-tactics', raidTacticSummaryText(report.tactics)));
+    }
+    raidSummaryEl?.replaceChildren(...summaryLines);
+  }
+
+  /** 当夜决策小结文案(纯展示:拼接报告快照,规则都在 sim)。 */
+  function raidTacticSummaryText(tactics: NonNullable<RaidNightReport['tactics']>): string {
+    const parts: string[] = [];
+    if (tactics.stance.id !== 'balanced') {
+      parts.push(`阵形「${tactics.stance.name}」`);
+    }
+    if (tactics.consumable !== undefined) {
+      parts.push(`消耗品 +${tactics.consumable.bonusPercent}%`);
+    }
+    const readyBuffs = tactics.worldBuffs.filter((buff) => buff.ready);
+    if (readyBuffs.length > 0) {
+      parts.push(`世界Buff +${readyBuffs.reduce((sum, buff) => sum + buff.bonusPercent, 0)}%`);
+    }
+    const lateBuffs = tactics.worldBuffs.filter((buff) => !buff.ready);
+    const lateNote = lateBuffs.length > 0 ? `;${lateBuffs.map((buff) => `「${buff.name}」未及备妥`).join('、')}` : '';
+    return `当夜决策:${parts.length > 0 ? parts.join(' · ') : '无战力增益'}(合计 +${tactics.bonusPowerPercent}%)${lateNote}。`;
   }
 
   /** 血条更新(百分比文本 + 宽度)。 */

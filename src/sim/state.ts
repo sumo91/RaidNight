@@ -7,6 +7,7 @@ import { DEFAULT_LOOT_SYSTEM, VAULT, type LootSystemId } from '../content/econom
 import { RECRUIT } from '../content/recruit';
 import type { DepartureReason } from '../content/reputation';
 import type { GearSlot, Quality } from '../content/gear';
+import type { ConsumableTierId, RaidStanceId, WorldBuffId } from '../content/raid-tactics';
 
 /**
  * 团员画像:除 id 与会长标记外的全部团员维度。
@@ -188,6 +189,26 @@ export function createInitialEconomy(clockGameMinutes: number): GuildEconomy {
   };
 }
 
+/** 已启用的世界 Buff:记录启用时刻,是否备妥由筹备时长判定(就绪式见 sim/raid.ts)。 */
+export interface ArmedWorldBuff {
+  readonly buffId: WorldBuffId;
+  /** 启用时刻(游戏分钟;启用即从金库拨款,无论是否来得及都不退)。 */
+  readonly armedAtGameMinutes: number;
+}
+
+/**
+ * 开荒决策面(T14,DESIGN):挂在开团安排上的三项赛前决策,当夜结算生效。
+ * 安排随团本夜结束清空 ⇒ 决策同样只对当夜有效(时效);下周重新开团、重新决策。
+ */
+export interface RaidTactics {
+  /** 消耗品预算档位(设定时金库已拨款;换档再全额拨款、此前不退)。 */
+  readonly consumableTier?: ConsumableTierId;
+  /** 已启用的世界 Buff(启用时金库已拨款;多个叠加,就绪判定逐项进行)。 */
+  readonly worldBuffs?: readonly ArmedWorldBuff[];
+  /** 编成微调阵形(缺省 = 常规阵形)。 */
+  readonly stance?: RaidStanceId;
+}
+
 /**
  * 开团安排(计划层):已开团的团本。
  * 团本夜 = 下一个游戏周边界(团本 CD = 游戏周,DESIGN):门面在跨过
@@ -197,6 +218,8 @@ export interface RaidPlan {
   readonly raidId: string;
   /** 开团时刻(游戏分钟;展示用)。 */
   readonly openedAtGameMinutes: number;
+  /** 赛前决策(T14;缺省 = 全不启用)。 */
+  readonly tactics?: RaidTactics;
 }
 
 /** 团本夜单首领结算结果(直播视图与事件日志的数据面)。 */
@@ -231,6 +254,34 @@ export interface RaidWipe {
   readonly moodHit: number;
 }
 
+/**
+ * 团本夜赛前决策的生效快照(T14;直播小结与测试断言的数据面)。
+ * 金币在指令时刻已扣,这里记的是当夜实际生效的增益与已花金额。
+ */
+export interface RaidTacticsEffect {
+  /** 当夜阵形(未微调 = 常规阵形)。 */
+  readonly stance: { readonly id: RaidStanceId; readonly name: string };
+  /** 消耗品预算(未设 = undefined)。 */
+  readonly consumable?: {
+    readonly id: ConsumableTierId;
+    readonly name: string;
+    readonly bonusPercent: number;
+    /** 该档拨款额(指令时已扣)。 */
+    readonly goldSpent: number;
+  };
+  /** 世界 Buff 逐项:是否就绪与生效增益(未就绪 = 不生效,但金已花)。 */
+  readonly worldBuffs: readonly {
+    readonly id: WorldBuffId;
+    readonly name: string;
+    readonly ready: boolean;
+    /** 就绪时的增益 %(未就绪为 0)。 */
+    readonly bonusPercent: number;
+    readonly goldSpent: number;
+  }[];
+  /** 当夜战力增益合计 %(消耗品 + 就绪世界 Buff;阵形是取舍不是增益,不计入)。 */
+  readonly bonusPowerPercent: number;
+}
+
 /** 一次团本夜的结算报告(直播视图:首领血条 + 40 人点阵 + 滚动战斗日志)。 */
 export interface RaidNightReport {
   readonly raidId: string;
@@ -254,6 +305,8 @@ export interface RaidNightReport {
   readonly repairGold: number;
   /** 本夜分配结算摘要(T11:双钱包流向与制度代价;夜被取消时无报告)。 */
   readonly loot?: RaidLootFlow;
+  /** 本夜赛前决策的生效快照(T14;未做任何决策时为 undefined)。 */
+  readonly tactics?: RaidTacticsEffect;
 }
 
 /** 团本夜的分配结算摘要:三种制度的金币流向与忠诚/心情代价对照(金库页与测试断言共用)。 */

@@ -4,6 +4,11 @@ import { DUNGEON_BY_ID } from '../content/dungeons';
 import { EXTERNAL_ACTIVITY_BY_ID, LOOT_SYSTEM_BY_ID, type ExternalActivityId } from '../content/economy';
 import { LEVELING_MAP_BY_ID } from '../content/maps';
 import { RAID_BY_ID } from '../content/raids';
+import {
+  CONSUMABLE_TIER_BY_ID,
+  RAID_STANCE_BY_ID,
+  WORLD_BUFF_BY_ID,
+} from '../content/raid-tactics';
 import type { GuildCommand } from './commands';
 import { GAME_MINUTES_PER_DAY, GAME_MINUTES_PER_WEEK, gameDay, gameWeek } from './clock';
 import { settleDungeonDay, squadDungeon, squadDungeonReadiness } from './dungeon';
@@ -27,7 +32,7 @@ import {
   renownStanding,
   rosterCapForRung,
 } from './reputation';
-import { settleRaidNight } from './raid';
+import { settleRaidNight, tacticsInvestmentGold } from './raid';
 import { generateApplicantPool } from './recruit';
 import { pickOne } from './rng';
 import { repairCostFactor, settleWorldDay, settleWorldWeek } from './world';
@@ -347,8 +352,104 @@ function applyCommand(state: GameState, command: GuildCommand, collector: EventC
       if (state.raidPlan === undefined) {
         return state; // 本就没有开团安排:忽略
       }
+      // 决策金在指令时刻已扣:取消安排 ⇒ 本周采购作废(开荒决策面的时效成本)
+      const wasted = tacticsInvestmentGold(state.raidPlan);
       collector.push(state.clockGameMinutes, '团本', '取消开团安排,本周不开团。');
+      if (wasted > 0) {
+        collector.push(
+          state.clockGameMinutes,
+          '团本',
+          `本周赛前采购 ${wasted} 金(消耗品与世界 Buff)随之作废 —— 下周重新开团、重新决策。`,
+        );
+      }
       return { ...state, raidPlan: undefined };
+    }
+    case 'setConsumableBudget': {
+      const plan = state.raidPlan;
+      if (plan === undefined) {
+        return state; // 未开团:没有可为之采购的团本夜,忽略
+      }
+      const def = CONSUMABLE_TIER_BY_ID.get(command.tier);
+      if (def === undefined) {
+        return state; // 档位不在内容表:忽略
+      }
+      if (plan.tactics?.consumableTier === def.id) {
+        return state; // 已是该档:无变化、无事件(不重复拨款)
+      }
+      if (state.vault.gold < def.costGold) {
+        return state; // 金库拨款不足:买不成(金库页会标示余额)
+      }
+      const vault = { ...state.vault, gold: state.vault.gold - def.costGold };
+      const rebudget = plan.tactics?.consumableTier !== undefined;
+      collector.push(
+        state.clockGameMinutes,
+        '团本',
+        `开荒采购:金库拨款 ${def.costGold} 金购入「${def.name}」,当夜全团战力 +${def.powerBonusPercent}%${rebudget ? ';此前拨款作废' : ''}。`,
+      );
+      return {
+        ...state,
+        vault,
+        raidPlan: {
+          ...plan,
+          tactics: { ...plan.tactics, consumableTier: def.id },
+        },
+      };
+    }
+    case 'armWorldBuff': {
+      const plan = state.raidPlan;
+      if (plan === undefined) {
+        return state; // 未开团:没有可为之筹备的团本夜,忽略
+      }
+      const def = WORLD_BUFF_BY_ID.get(command.buffId);
+      if (def === undefined) {
+        return state; // Buff 不在内容表:忽略
+      }
+      const armed = plan.tactics?.worldBuffs ?? [];
+      if (armed.some((entry) => entry.buffId === def.id)) {
+        return state; // 已在筹备:无变化、无事件(不重复拨款)
+      }
+      if (state.vault.gold < def.costGold) {
+        return state; // 金库拨款不足:启程不成
+      }
+      const vault = { ...state.vault, gold: state.vault.gold - def.costGold };
+      collector.push(
+        state.clockGameMinutes,
+        '团本',
+        `世界Buff 启用:「${def.name}」—— 金库拨款 ${def.costGold} 金启程筹备,需 ${def.prepGameDays} 个游戏日;团本夜前备妥则当夜战力 +${def.powerBonusPercent}%。`,
+      );
+      return {
+        ...state,
+        vault,
+        raidPlan: {
+          ...plan,
+          tactics: {
+            ...plan.tactics,
+            worldBuffs: [
+              ...armed,
+              { buffId: def.id, armedAtGameMinutes: state.clockGameMinutes },
+            ],
+          },
+        },
+      };
+    }
+    case 'setRaidStance': {
+      const plan = state.raidPlan;
+      if (plan === undefined) {
+        return state; // 未开团:没有可为之微调的团队,忽略
+      }
+      const def = RAID_STANCE_BY_ID.get(command.stance);
+      if (def === undefined || plan.tactics?.stance === def.id) {
+        return state; // 阵形不在内容表或本就是现行阵形:忽略
+      }
+      collector.push(
+        state.clockGameMinutes,
+        '团本',
+        `编成微调:团本夜改用「${def.name}」—— ${def.tagline}`,
+      );
+      return {
+        ...state,
+        raidPlan: { ...plan, tactics: { ...plan.tactics, stance: def.id } },
+      };
     }
     case 'assignCarry':
     case 'assignWildRaid':

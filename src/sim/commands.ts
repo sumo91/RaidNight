@@ -5,6 +5,7 @@
  */
 
 import type { LootSystemId } from '../content/economy';
+import type { ConsumableTierId, RaidStanceId, WorldBuffId } from '../content/raid-tactics';
 
 export type GuildCommand =
   /** 公会更名 */
@@ -43,6 +44,22 @@ export type GuildCommand =
   | { readonly type: 'openRaid'; readonly raidId: string }
   /** 取消开团安排(本周不开团) */
   | { readonly type: 'cancelRaid' }
+  /**
+   * 设定消耗品预算(开荒决策面,T14:金库拨款买药水合剂,提升当夜全团战力)。
+   * 未开团/未知档位/金库不足/同档重复由门面忽略;换档再全额拨款、此前不退。
+   */
+  | { readonly type: 'setConsumableBudget'; readonly tier: ConsumableTierId }
+  /**
+   * 启用世界 Buff(开荒决策面,T14:拨款 + 筹备时长的时效增益)。
+   * 未开团/未知 Buff/重复启用/金库不足由门面忽略;
+   * 启用时刻距团本夜不足筹备时长 ⇒ 当夜无效(拨款不退)。
+   */
+  | { readonly type: 'armWorldBuff'; readonly buffId: WorldBuffId }
+  /**
+   * 编成微调阵形(开荒决策面,T14:职能分与光环覆盖的取舍系数)。
+   * 未开团/未知阵形/同阵形重复由门面忽略。
+   */
+  | { readonly type: 'setRaidStance'; readonly stance: RaidStanceId }
   /** 更换分配制度(GLOSSARY:三选一可更换有转换成本;成本不足/制度相同由门面忽略) */
   | { readonly type: 'setLootSystem'; readonly system: LootSystemId }
   /** 开关自肥(仅会长裁量制下生效;GLOSSARY:自肥) */

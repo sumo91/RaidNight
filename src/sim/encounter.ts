@@ -3,7 +3,9 @@
  * 对副本难度目标的三段式比较 —— 低配必败、超配必胜、中间线性概率分布。
  *
  * 本模块是纯函数引擎,不做任何随机消费(掷点见 rollEncounterOutcome)与状态更新;
- * 5 人本(src/sim/dungeon.ts)是第一个接入方,后续野团 / G团 / 团本复用同一引擎。
+ * 5 人本(src/sim/dungeon.ts)是第一个接入方,团本(sim/raid.ts)复用同一引擎
+ * —— 团本夜可附带「结算修正量」(T14 开荒决策面:阵形系数与药水合剂增益),
+ * 修正量全部缺省时行为与基础引擎完全一致(5 人本不传即不受影响)。
  * 一切可调数值在 content/dungeons.ts(数据驱动)。
  */
 
@@ -24,9 +26,22 @@ export interface EncounterPowerInput {
   readonly auraBonusPercent: number;
 }
 
+/**
+ * 结算修正量(T14 开荒决策面):对三要素战力的可选修饰。
+ * 三者全部缺省 ⇒ 战力公式与基础引擎逐字相同。
+ */
+export interface EncounterModifiers {
+  /** 职能分系数:乘在封顶后的分项上(缺省 1;编成微调阵形的职能配比取舍)。 */
+  readonly roleMultipliers?: Readonly<Partial<Record<Role, number>>>;
+  /** 光环覆盖系数:乘在光环合计百分比上(缺省 1;阵形的光环取舍)。 */
+  readonly auraMultiplier?: number;
+  /** 额外战力增益合计百分比:乘在最终战力上(缺省 0;消耗品与世界 Buff)。 */
+  readonly bonusPowerPercent?: number;
+}
+
 /** 结算评估:纯计算、不掷点。 */
 export interface EncounterAssessment {
-  /** 队伍战力:(平均装等 + 职能分) × (1 + 光环合计%) */
+  /** 队伍战力:(平均装等 + 职能分) × (1 + 光环合计%) × (1 + 增益合计%) */
   readonly power: number;
   readonly target: number;
   /** 成功概率(三段式:0、(0,1) 线性、1) */
@@ -34,27 +49,40 @@ export interface EncounterAssessment {
   readonly band: EncounterBand;
 }
 
-/** 职能结构分:坦克/治疗/输出各自计入(封顶件数在内容表)。 */
-export function roleScore(roleCounts: Readonly<Record<Role, number>>): number {
+/** 职能结构分:坦克/治疗/输出各自计入(封顶件数在内容表;分项可被阵形系数缩放)。 */
+export function roleScore(
+  roleCounts: Readonly<Record<Role, number>>,
+  modifiers?: EncounterModifiers,
+): number {
   const config = DUNGEON_SETTLEMENT.roleScore;
+  const mult = (role: Role): number => modifiers?.roleMultipliers?.[role] ?? 1;
   return (
-    Math.min(roleCounts['坦克'], config.tankCap) * config.perTank +
-    Math.min(roleCounts['治疗'], config.healerCap) * config.perHealer +
-    Math.min(roleCounts['输出'], config.dpsCap) * config.perDps
+    Math.min(roleCounts['坦克'], config.tankCap) * config.perTank * mult('坦克') +
+    Math.min(roleCounts['治疗'], config.healerCap) * config.perHealer * mult('治疗') +
+    Math.min(roleCounts['输出'], config.dpsCap) * config.perDps * mult('输出')
   );
 }
 
-/** 队伍战力:(平均装等 + 职能分) × (1 + 光环合计%)。 */
-export function encounterPower(input: EncounterPowerInput): number {
-  return (input.averageItemLevel + roleScore(input.roleCounts)) * (1 + input.auraBonusPercent / 100);
+/** 队伍战力:(平均装等 + 职能分) × (1 + 光环合计% × 光环系数) × (1 + 增益合计%)。 */
+export function encounterPower(
+  input: EncounterPowerInput,
+  modifiers?: EncounterModifiers,
+): number {
+  const aura = input.auraBonusPercent * (modifiers?.auraMultiplier ?? 1);
+  const bonus = modifiers?.bonusPowerPercent ?? 0;
+  return (input.averageItemLevel + roleScore(input.roleCounts, modifiers)) * (1 + aura / 100) * (1 + bonus / 100);
 }
 
 /**
  * 三段式评估:战力 ≤ 目标 − failMargin 必败(概率 0);
  * ≥ 目标 + winMargin 必胜(概率 1);之间线性过渡(悬念区间)。
  */
-export function assessEncounter(input: EncounterPowerInput, target: number): EncounterAssessment {
-  const power = encounterPower(input);
+export function assessEncounter(
+  input: EncounterPowerInput,
+  target: number,
+  modifiers?: EncounterModifiers,
+): EncounterAssessment {
+  const power = encounterPower(input, modifiers);
   const lower = target - DUNGEON_SETTLEMENT.failMargin;
   const upper = target + DUNGEON_SETTLEMENT.winMargin;
   const successChance = Math.max(0, Math.min(1, (power - lower) / (upper - lower)));

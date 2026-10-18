@@ -7,16 +7,34 @@
  * 一切可调数值在 content/raids.ts(数据驱动);纯函数、只走注入的种子随机链
  * (每首领一次成败掷点 → 胜利掉落抽取,顺序固定)。
  *
+ * 开荒决策面(T14,DESIGN):开团安排可携带三项赛前决策 —— 消耗品预算
+ * (content/raid-tactics 的拨款档)、世界 Buff(启用时刻距团本夜足额筹备才生效)、
+ * 编成微调阵形(职能分与光环覆盖的取舍系数)—— 经结算修正量进入当夜每个
+ * 首领的战力评估;决策随安排在夜末清空(时效 = 当夜)。
+ *
  * 演出级别(DESIGN「三级演出」):团本 = 直播视图 —— 结算产出结构化
  * RaidNightReport(首领血条、40 人点阵、滚动战斗日志的数据面)与逐条文本
- * (经门面入事件流);赛前决策(开团/编成)在赛前完成,赛中只观赛不可介入。
+ * (经门面入事件流);赛前决策(开团/编成/预算/Buff/阵形)在赛前完成,
+ * 赛中只观赛不可介入。
  * 团灭代价 = 修理金(公会金库,余额封顶)+ 疲劳 + 士气(心情),无永久损失:
  * 名册不动、忠诚不动、装备不丢,下个团本夜再战(开荒)。
  */
 
 import { RAID_BY_ID, RAID_DROP_QUALITY, RAID_SETTLEMENT, RAIDS, type RaidDef } from '../content/raids';
+import {
+  CONSUMABLE_TIER_BY_ID,
+  DEFAULT_RAID_STANCE,
+  RAID_STANCES,
+  RAID_STANCE_BY_ID,
+  WORLD_BUFF_BY_ID,
+  type ConsumableTierId,
+  type RaidStanceId,
+  type WorldBuffDef,
+  type WorldBuffId,
+} from '../content/raid-tactics';
 import { LOOT_SYSTEM_BY_ID } from '../content/economy';
 import { LEVELING } from '../content/maps';
+import { GAME_MINUTES_PER_DAY, GAME_MINUTES_PER_WEEK } from './clock';
 import type { Role } from '../content/classes';
 import { composeSquad, memberRole, teamCheckOf } from './comp';
 import { rollDropItems } from './dungeon';
@@ -25,12 +43,13 @@ import {
   accrueDkpOnKill,
   distributeRaidDrop,
 } from './economy';
-import { assessEncounter } from './encounter';
+import { assessEncounter, encounterPower, type EncounterModifiers } from './encounter';
 import { evaluateUnlockGates } from './ladder';
 import { averageItemLevel, guildAverageItemLevel, guildAverageLevel } from './roster';
 import { nextFloat } from './rng';
 import type {
   DropOutcome,
+  GameState,
   GuildEconomy,
   GuildVault,
   Member,
@@ -108,6 +127,174 @@ export function raidTeam(
   };
 }
 
+// ———— 开荒决策面(T14):就绪判定与派生量(结算、门面与 UI 共用同一式)————
+
+/**
+ * 世界 Buff 就绪判定(唯一真源):启用时刻距团本夜的筹备时长须足额。
+ * 启用得晚于筹备窗 ⇒ 未及备妥,当夜无效(拨款已在启用时花掉,不退)。
+ */
+export function worldBuffReady(
+  def: WorldBuffDef,
+  armedAtGameMinutes: number,
+  nightAtGameMinutes: number,
+): boolean {
+  return nightAtGameMinutes - armedAtGameMinutes >= def.prepGameDays * GAME_MINUTES_PER_DAY;
+}
+
+/** 已投入一个团本夜的赛前采购金合计(消耗品 + 已启用世界 Buff;取消安排时的浪费提示)。 */
+export function tacticsInvestmentGold(plan: RaidPlan): number {
+  const tactics = plan.tactics;
+  if (tactics === undefined) {
+    return 0;
+  }
+  const consumable =
+    tactics.consumableTier !== undefined
+      ? CONSUMABLE_TIER_BY_ID.get(tactics.consumableTier)?.costGold ?? 0
+      : 0;
+  const buffs = (tactics.worldBuffs ?? []).reduce(
+    (sum, armed) => sum + (WORLD_BUFF_BY_ID.get(armed.buffId)?.costGold ?? 0),
+    0,
+  );
+  return consumable + buffs;
+}
+
+/** 已启用世界 Buff的就绪视图(UI 决策面板渲染;就绪判定与团本夜结算同一式)。 */
+export interface ArmedWorldBuffView {
+  readonly def: WorldBuffDef;
+  readonly armedAtGameMinutes: number;
+  /** 距团本夜(下一个游戏周边界)的筹备时长(游戏分钟)。 */
+  readonly leadGameMinutes: number;
+  /** 就绪 = 筹备时长已足额(距夜不足 ⇒ 来不及,当夜无效)。 */
+  readonly readyByNight: boolean;
+}
+
+/** 逐项列出开团安排上已启用的世界 Buff 及其就绪状态(纯派生量,不改状态)。 */
+export function armedWorldBuffs(state: GameState): readonly ArmedWorldBuffView[] {
+  const plan = state.raidPlan;
+  if (plan === undefined) {
+    return [];
+  }
+  const nightAt =
+    (Math.floor(state.clockGameMinutes / GAME_MINUTES_PER_WEEK) + 1) * GAME_MINUTES_PER_WEEK;
+  return (plan.tactics?.worldBuffs ?? []).flatMap((armed) => {
+    const def = WORLD_BUFF_BY_ID.get(armed.buffId);
+    if (def === undefined) {
+      return []; // Buff 已从内容表裁撤:不展示(结算同样跳过)
+    }
+    return [
+      {
+        def,
+        armedAtGameMinutes: armed.armedAtGameMinutes,
+        leadGameMinutes: Math.max(0, nightAt - armed.armedAtGameMinutes),
+        readyByNight: worldBuffReady(def, armed.armedAtGameMinutes, nightAt),
+      },
+    ];
+  });
+}
+
+/** 阵形战力预览条目:同一团队在各阵形下的战力(编成微调的取舍可见)。 */
+export interface StancePowerPreview {
+  readonly stanceId: string;
+  readonly name: string;
+  /** 该阵形下的团队战力(统一结算引擎,不带消耗品/Buff 增益)。 */
+  readonly power: number;
+}
+
+/** 各阵形下的团队战力预览(基线 = 常规阵形;UI 与测试共用,纯派生量)。 */
+export function stancePowerPreviews(
+  members: readonly Member[],
+  squads: readonly Squad[],
+): readonly StancePowerPreview[] {
+  const team = raidTeam(members, squads);
+  const base = {
+    averageItemLevel: team.averageItemLevel,
+    roleCounts: team.roleCounts,
+    auraBonusPercent: team.auraBonusPercent,
+  };
+  return RAID_STANCES.map((def) => ({
+    stanceId: def.id,
+    name: def.name,
+    power: encounterPower(base, {
+      roleMultipliers: def.roleMultipliers,
+      auraMultiplier: def.auraMultiplier,
+    }),
+  }));
+}
+
+/** 夜内结算用的决策解析:阵形、消耗品、逐项就绪的世界 Buff(内容表裁撤防御)。 */
+interface ResolvedTactics {
+  readonly stanceId: RaidStanceId;
+  readonly stanceName: string;
+  readonly stanceNotDefault: boolean;
+  readonly consumable?: { readonly id: ConsumableTierId; readonly name: string; readonly bonusPercent: number; readonly goldSpent: number };
+  readonly worldBuffs: readonly {
+    readonly id: WorldBuffId;
+    readonly name: string;
+    readonly ready: boolean;
+    readonly bonusPercent: number;
+    readonly goldSpent: number;
+    readonly prepGameDays: number;
+    readonly leadDays: number;
+  }[];
+  /** 消耗品 + 就绪世界 Buff 的增益合计 %(阵形是取舍,不计入)。 */
+  readonly bonusPowerPercent: number;
+  /** 是否做了任何一项决策(报告快照与事件行只在做决策时出现)。 */
+  readonly any: boolean;
+}
+
+/** 解析开团安排上的赛前决策(不掷随机、不改状态;团本夜结算与取消提示共用)。 */
+function resolveTactics(plan: RaidPlan, atGameMinutes: number): ResolvedTactics {
+  const tactics = plan.tactics;
+  const stance =
+    (tactics?.stance !== undefined ? RAID_STANCE_BY_ID.get(tactics.stance) : undefined) ??
+    RAID_STANCE_BY_ID.get(DEFAULT_RAID_STANCE)!;
+  const consumableDef =
+    tactics?.consumableTier !== undefined
+      ? CONSUMABLE_TIER_BY_ID.get(tactics.consumableTier)
+      : undefined;
+  const worldBuffs = (tactics?.worldBuffs ?? []).flatMap((armed) => {
+    const def = WORLD_BUFF_BY_ID.get(armed.buffId);
+    if (def === undefined) {
+      return [];
+    }
+    const ready = worldBuffReady(def, armed.armedAtGameMinutes, atGameMinutes);
+    return [
+      {
+        id: def.id,
+        name: def.name,
+        ready,
+        bonusPercent: ready ? def.powerBonusPercent : 0,
+        goldSpent: def.costGold,
+        prepGameDays: def.prepGameDays,
+        leadDays: (atGameMinutes - armed.armedAtGameMinutes) / GAME_MINUTES_PER_DAY,
+      },
+    ];
+  });
+  const bonusPowerPercent =
+    (consumableDef?.powerBonusPercent ?? 0) +
+    worldBuffs.reduce((sum, buff) => sum + buff.bonusPercent, 0);
+  return {
+    stanceId: stance.id,
+    stanceName: stance.name,
+    stanceNotDefault: stance.id !== DEFAULT_RAID_STANCE,
+    consumable:
+      consumableDef === undefined
+        ? undefined
+        : {
+            id: consumableDef.id,
+            name: consumableDef.name,
+            bonusPercent: consumableDef.powerBonusPercent,
+            goldSpent: consumableDef.costGold,
+          },
+    worldBuffs,
+    bonusPowerPercent,
+    any:
+      consumableDef !== undefined ||
+      worldBuffs.length > 0 ||
+      (tactics?.stance !== undefined && tactics.stance !== DEFAULT_RAID_STANCE),
+  };
+}
+
 /** 整夜结算入参。emit 把战斗日志文本交回门面(带时刻与序号入事件流)。 */
 export interface SettleRaidNightParams {
   readonly members: readonly Member[];
@@ -156,6 +343,10 @@ export function settleRaidNight(params: SettleRaidNightParams): SettleRaidNightR
     return { members: params.members, vault, economy: params.economy, renownPoints: params.renownPoints, rngState: params.rngState };
   }
 
+  // 赛前决策解析(纯计算,不掷随机):夜取消的浪费提示与夜内的战力修正共用
+  const tactics = resolveTactics(plan, atGameMinutes);
+  const wastedGold = tacticsInvestmentGold(plan);
+
   // 开团复核①:内容阶梯门槛(开团后名册回落则取消 —— 未达标不可进入)
   const unlock = evaluateUnlockGates(raid.unlock, {
     averageLevel: guildAverageLevel(params.members),
@@ -163,6 +354,9 @@ export function settleRaidNight(params: SettleRaidNightParams): SettleRaidNightR
   });
   if (!unlock.unlocked) {
     emit(`团本夜取消:「${raid.name}」门槛未达(${unlock.unmet.join('、')}),本周不开团。`);
+    if (wastedGold > 0) {
+      emit(`本周赛前采购 ${wastedGold} 金随夜取消作废 —— 下周重新开团、重新决策。`);
+    }
     return { members: params.members, vault, economy: params.economy, renownPoints: params.renownPoints, rngState: params.rngState };
   }
 
@@ -172,6 +366,9 @@ export function settleRaidNight(params: SettleRaidNightParams): SettleRaidNightR
     emit(
       `团本夜取消:团队检查未通过(${check.failures.map((f) => f.text).join('、')}),补齐编成后下周再战。`,
     );
+    if (wastedGold > 0) {
+      emit(`本周赛前采购 ${wastedGold} 金随夜取消作废 —— 下周重新开团、重新决策。`);
+    }
     return { members: params.members, vault, economy: params.economy, renownPoints: params.renownPoints, rngState: params.rngState };
   }
 
@@ -196,6 +393,38 @@ export function settleRaidNight(params: SettleRaidNightParams): SettleRaidNightR
     `团本夜开始:「${raid.name}」—— ${raid.bosses.length} 名首领按顺序结算,全团 ${team.teamSize} 人,平均装等 ${Math.round(team.averageItemLevel)}。`,
   );
 
+  // 赛前决策生效宣告(T14):阵形与增益逐项可见;未及备妥的世界 Buff 点名作废
+  const stanceDef = RAID_STANCE_BY_ID.get(tactics.stanceId) ?? RAID_STANCE_BY_ID.get(DEFAULT_RAID_STANCE)!;
+  const nightModifiers: EncounterModifiers = {
+    roleMultipliers: stanceDef.roleMultipliers,
+    auraMultiplier: stanceDef.auraMultiplier,
+    bonusPowerPercent: tactics.bonusPowerPercent,
+  };
+  if (tactics.any) {
+    const parts: string[] = [];
+    if (tactics.stanceNotDefault) {
+      parts.push(`阵形「${tactics.stanceName}」`);
+    }
+    if (tactics.consumable !== undefined) {
+      parts.push(`消耗品「${tactics.consumable.name}」+${tactics.consumable.bonusPercent}%`);
+    }
+    for (const buff of tactics.worldBuffs) {
+      if (buff.ready) {
+        parts.push(`世界Buff「${buff.name}」+${buff.bonusPercent}%`);
+      }
+    }
+    const tail =
+      tactics.bonusPowerPercent > 0 ? `当夜战力增益合计 +${tactics.bonusPowerPercent}%` : '无战力增益';
+    emit(`赛前决策生效:${parts.length > 0 ? `${parts.join('、')};` : ''}${tail}。`);
+    for (const buff of tactics.worldBuffs) {
+      if (!buff.ready) {
+        emit(
+          `世界Buff「${buff.name}」未及备妥(启用距团本夜仅 ${Math.floor(buff.leadDays)} 日,需 ${buff.prepGameDays} 日),本周无效 —— 拨款 ${buff.goldSpent} 金已花。`,
+        );
+      }
+    }
+  }
+
   /** 只更新出战团员(会长角色不在小队则不受团本夜影响)。 */
   const mapTeam = (update: (member: Member) => Member): void => {
     members = members.map((member) => (teamIds.has(member.id) ? update(member) : member));
@@ -207,7 +436,7 @@ export function settleRaidNight(params: SettleRaidNightParams): SettleRaidNightR
 
   for (const [index, boss] of raid.bosses.entries()) {
     const ordinal = index + 1;
-    // 战力评估(不掷点)+ 硬门槛裁决:装等不达标 ⇒ 必败,无论战力
+    // 战力评估(不掷点;T14 赛前决策经结算修正量进入)+ 硬门槛裁决:装等不达标 ⇒ 必败,无论战力
     const assessment = assessEncounter(
       {
         averageItemLevel: team.averageItemLevel,
@@ -215,6 +444,7 @@ export function settleRaidNight(params: SettleRaidNightParams): SettleRaidNightR
         auraBonusPercent: team.auraBonusPercent,
       },
       boss.difficultyTarget,
+      nightModifiers,
     );
     const hardGateMet =
       boss.hardGateItemLevel === undefined ||
@@ -416,6 +646,20 @@ export function settleRaidNight(params: SettleRaidNightParams): SettleRaidNightR
       attendeeLoyaltyPerNight: system.attendeeLoyaltyPerNight,
       attendeeMoodPerNight: system.attendeeMoodPerNight,
     },
+    tactics: tactics.any
+      ? {
+          stance: { id: tactics.stanceId, name: tactics.stanceName },
+          consumable: tactics.consumable,
+          worldBuffs: tactics.worldBuffs.map((buff) => ({
+            id: buff.id,
+            name: buff.name,
+            ready: buff.ready,
+            bonusPercent: buff.bonusPercent,
+            goldSpent: buff.goldSpent,
+          })),
+          bonusPowerPercent: tactics.bonusPowerPercent,
+        }
+      : undefined,
   };
 
   return {
