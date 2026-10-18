@@ -8,8 +8,8 @@ ADR-0001 的交付面:桌面 = Tauri(Steam),移动 = Capacitor(TapTap);
 | 平台 | 产物 | 构建路径 | 状态 |
 | --- | --- | --- | --- |
 | macOS 桌面 | `WowIdle.app` + `.dmg` | 本机 `npx tauri build` | ✅ 本机已产出并验证可运行 |
-| Windows 桌面 | NSIS 安装器 | CI:桌面构建工作流 | ⚠️ 本机无 MSVC,产物在 CI(见 §2) |
-| Android | APK(debug/release) | CI:安卓构建工作流 | ⚠️ 本机无 JDK/SDK,产物在 CI(见 §3) |
+| Windows 桌面 | NSIS 安装器 | CI:桌面构建工作流 | ✅ CI 已跑通(见 §2;本机无 MSVC) |
+| Android | APK(debug/release) | CI:安卓构建工作流 | ✅ CI 已跑通(见 §3;本机无 JDK/SDK) |
 | 商店素材 | 图标/胶囊/截图/文案 | `store/`(本仓) | ✅ 就绪(见 §5) |
 
 ## 1. macOS 桌面(本机验证通过)
@@ -62,6 +62,11 @@ T21 本机验证记录(2026-10-18,arm64):
    配置里面向 macOS 的 targets);
 3. `macos` 作业同配方出 `.app`/`.dmg`,证明 CI 可复现桌面产物。
 
+CI 验证记录(2026-10-18,run 39109119279):两作业全绿 —— Windows 出
+NSIS 安装器(artifact `WowIdle-windows-x64`),macOS 出 `.app`+`.dmg`
+(artifact `WowIdle-macos`);CI 的 DMG 装帧(create-dmg/Finder)在
+runner 上正常,仅本机受 AppleScript 超时影响(见 §1)。
+
 **Steam 交付缺口(如实标注,未完成)**:
 
 - Steamworks SDK 未接入:需要 Steam Partner 账号下载 SDK 并持有
@@ -92,6 +97,10 @@ Android SDK,APK 构建一律走 CI:`.github/workflows/build-android.yml`。
 3. 产物:artifact `WowIdle-android-apk`(debug 可装即玩;release 无密钥时
    回退调试签名 —— `android/app/build.gradle` 的 `releaseSigning`)。
    JDK 用 21(Capacitor 8.5.3 的 Gradle 是 `VERSION_21`,17 编不过)。
+
+CI 验证记录(2026-10-18,run 39109116696):全绿,artifact
+`WowIdle-android-apk` 约 6.3 MB(debug + release,release 为调试签名
+回退 —— 上 TapTap 前按下面一步配正式密钥)。
 
 **发布签名(上 TapTap 前必做,一次性)**:
 
