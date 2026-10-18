@@ -28,7 +28,7 @@ export interface EncounterPowerInput {
 
 /**
  * 结算修正量(T14 开荒决策面):对三要素战力的可选修饰。
- * 三者全部缺省 ⇒ 战力公式与基础引擎逐字相同。
+ * 四者全部缺省 ⇒ 战力公式与基础引擎逐字相同。
  */
 export interface EncounterModifiers {
   /** 职能分系数:乘在封顶后的分项上(缺省 1;编成微调阵形的职能配比取舍)。 */
@@ -37,6 +37,12 @@ export interface EncounterModifiers {
   readonly auraMultiplier?: number;
   /** 额外战力增益合计百分比:乘在最终战力上(缺省 0;消耗品与世界 Buff)。 */
   readonly bonusPowerPercent?: number;
+  /**
+   * 职能分封顶件数的缩放系数(缺省 1;T16 战场按出战小队数放大 ——
+   * 战场队是 2–3 小队的聚合体,更大的队伍职能件数更多;5 人本与团本不传,
+   * 封顶与基础引擎一致)。
+   */
+  readonly roleCapScale?: number;
 }
 
 /** 结算评估:纯计算、不掷点。 */
@@ -56,10 +62,12 @@ export function roleScore(
 ): number {
   const config = DUNGEON_SETTLEMENT.roleScore;
   const mult = (role: Role): number => modifiers?.roleMultipliers?.[role] ?? 1;
+  // 封顶缩放(缺省 1):战场聚合队按小队数放大封顶件数,其余活动不传即原样
+  const scale = modifiers?.roleCapScale ?? 1;
   return (
-    Math.min(roleCounts['坦克'], config.tankCap) * config.perTank * mult('坦克') +
-    Math.min(roleCounts['治疗'], config.healerCap) * config.perHealer * mult('治疗') +
-    Math.min(roleCounts['输出'], config.dpsCap) * config.perDps * mult('输出')
+    Math.min(roleCounts['坦克'], config.tankCap * scale) * config.perTank * mult('坦克') +
+    Math.min(roleCounts['治疗'], config.healerCap * scale) * config.perHealer * mult('治疗') +
+    Math.min(roleCounts['输出'], config.dpsCap * scale) * config.perDps * mult('输出')
   );
 }
 

@@ -442,6 +442,7 @@ describe('虚拟服务器:门面接缝与存档(验收标准 1 与 5)', () => {
       ],
       milestones: [],
       rareDrops: [],
+      rankLadder: [],
     };
     // 第 1 周:玩家杀首领 1(有推进)⇒ 停滞清零、锚更新
     const week1 = settleWorldWeek({

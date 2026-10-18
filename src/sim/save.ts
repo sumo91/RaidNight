@@ -43,8 +43,11 @@ export const SAVE_KIND = 'wowidle-save';
  * - v11(T15):计划层 —— 状态新增可缺省的周计划 weeklyPlan(每周团本夜
  *   安排 + 当周目标),团本夜报告可带当周目标快照(goal);全部可缺省,
  *   旧档不迁移即兼容(无计划 = 每周手动开团,与 T14 行为一致)。
+ * - v12(T16):PvP —— 状态新增荣誉账本 honor(荣誉点 + 生涯荣誉,旧档从
+ *   零补:零荣誉、列兵起家)与可缺省的最近战场结果卡 lastBattlefieldReport;
+ *   荣誉墙新增军衔记录 rankLadder(旧档补空数组);小队活动含战场(battlefield)。
  */
-export const SAVE_VERSION = 11;
+export const SAVE_VERSION = 12;
 
 /** 版本化存档封皮:v1–v3 的本机旧档没有 kind,读入时视为 legacy。 */
 export interface SaveFile {
@@ -158,6 +161,16 @@ const MIGRATIONS: Readonly<Record<number, Migration>> = {
   9: (state) => state,
   // v10 → v11:计划层(weeklyPlan 与报告 goal 全部可缺省,旧档即兼容;恒等迁移仅记版次)
   10: (state) => state,
+  // v11 → v12:PvP —— 补荣誉账本(零荣誉、列兵起家)与荣誉墙军衔记录(空表)。
+  // 对伪造/损坏档做访问防御(honorWall 可能缺):取得到就补,取不到按空墙补
+  11: (state) => ({
+    ...state,
+    honor: state.honor ?? { points: 0, career: 0 },
+    honorWall:
+      state.honorWall !== undefined
+        ? { ...state.honorWall, rankLadder: state.honorWall.rankLadder ?? [] }
+        : createEmptyHonorWall(),
+  }),
 };
 
 /** 编码:状态 → 存档文本(localStorage 值与导出文件内容共用)。 */
@@ -245,6 +258,11 @@ function looksLikeGameState(state: GameState): boolean {
     !Array.isArray(state.honorWall.firstKills) ||
     !Array.isArray(state.honorWall.milestones) ||
     !Array.isArray(state.honorWall.rareDrops) ||
+    !Array.isArray(state.honorWall.rankLadder) ||
+    typeof state.honor !== 'object' ||
+    state.honor === null ||
+    typeof state.honor.points !== 'number' ||
+    typeof state.honor.career !== 'number' ||
     !Array.isArray(state.hallOfFame) ||
     typeof state.vault !== 'object' ||
     state.vault === null ||

@@ -86,11 +86,13 @@ export function squadDungeonReadiness(
   return { ready: reasons.length === 0, reasons };
 }
 
-/** 一件掉落(部位 + 品质 + 装等;穿戴去向由择优规则另行计算)。 */
+/** 一件掉落(部位 + 品质 + 装等,可携带战场向属性;穿戴去向由择优规则另行计算)。 */
 export interface DroppedItem {
   readonly slot: GearSlot;
   readonly quality: Quality;
   readonly itemLevel: number;
+  /** 战场向属性(军装兑换才有;缺省 = 无)。 */
+  readonly pvpPower?: number;
 }
 
 /**
@@ -158,10 +160,16 @@ export function bestWearer(
 }
 
 /** 换装:替换该部位装备(不可变:返回新 gear 数组;部位缺失时追加到末尾)。
- * 紫装同时计入功绩统计 rareLootWon(名人堂陈列;T12)—— 全项目换装的唯一入口。 */
+ * 军装的战场向属性(pvpPower)随之入格;紫装同时计入功绩统计 rareLootWon
+ * (名人堂陈列;T12)—— 全项目换装的唯一入口。 */
 export function equipItem(member: Member, item: DroppedItem): Member {
   const index = member.gear.findIndex((gear) => gear.slot === item.slot);
-  const piece = { slot: item.slot, quality: item.quality, itemLevel: item.itemLevel };
+  const piece = {
+    slot: item.slot,
+    quality: item.quality,
+    itemLevel: item.itemLevel,
+    ...(item.pvpPower !== undefined ? { pvpPower: item.pvpPower } : {}),
+  };
   const gear =
     index === -1
       ? [...member.gear, piece]

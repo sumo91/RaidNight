@@ -41,6 +41,18 @@ export type GuildCommand =
   | { readonly type: 'assignWildRaid'; readonly squadId: number }
   /** 停止小队野团(回城休整,疲劳自然恢复) */
   | { readonly type: 'stopWildRaid'; readonly squadId: number }
+  /**
+   * 编入战场队(T16,GLOSSARY:战场):满职能小队进驻分梯度战场(战场队最多 3 支小队;
+   * 未解锁/未满职能/战场队已满由门面忽略)。
+   */
+  | { readonly type: 'assignBattlefield'; readonly squadId: number; battlefieldId: string }
+  /** 撤出战场(回城休整,疲劳自然恢复) */
+  | { readonly type: 'stopBattlefield'; readonly squadId: number }
+  /**
+   * 兑换军装(T16,GLOSSARY:荣誉阶梯):荣誉点换一件 PvP 装备并立即穿上
+   * (军衔不足/荣誉点不足/未知单件由门面忽略)。
+   */
+  | { readonly type: 'redeemHonorGear'; readonly memberId: number; gearId: string }
   /** 开团(计划层:安排下一个团本夜;内容阶梯未解锁/团队检查未过由门面忽略) */
   | { readonly type: 'openRaid'; readonly raidId: string }
   /** 取消开团安排(本周不开团) */

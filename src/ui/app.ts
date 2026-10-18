@@ -7,7 +7,7 @@ import {
   VAULT,
   type LootSystemId,
 } from '../content/economy';
-import type { Quality } from '../content/gear';
+import { GEAR_SLOTS, type Quality } from '../content/gear';
 import { LEVELING } from '../content/maps';
 import {
   DEFAULT_WEEKLY_GOAL,
@@ -24,6 +24,7 @@ import {
   type RaidStanceId,
   type WorldBuffId,
 } from '../content/raid-tactics';
+import { HONOR_GEAR_SETS, HONOR_RANKS, PVP_SETTLEMENT } from '../content/pvp';
 import { RENOWN_RUNG_COUNT, RENOWN_TIERS } from '../content/reputation';
 import { SKILL_TIER_BY_ID } from '../content/skill-tiers';
 import { TRAIT_BY_ID } from '../content/traits';
@@ -44,10 +45,19 @@ import {
   rosterCapForRung,
   rungThreshold,
 } from '../sim/reputation';
+import {
+  battlefieldSquadCount,
+  battlefieldStatuses,
+  honorRankOf,
+  honorRankRung,
+  nextHonorRank,
+  squadBattlefield,
+} from '../sim/pvp';
 import { averageItemLevel, guildAverageItemLevel, guildAverageLevel } from '../sim/roster';
 import { activityQueue, nextRaidNight, nextSettlement } from '../sim/schedule';
 import { serverLadder, serverRanking } from '../sim/world';
 import type {
+  BattlefieldReport,
   DungeonRunReport,
   GameState,
   Member,
@@ -206,6 +216,12 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
           </div>
           <div class="dungeon-report" data-ref="dungeon-report"></div>
         </div>
+        <div class="report-panel" data-ref="battlefield-report-wrap" hidden>
+          <div class="pool-head">
+            <h2 class="section-title">最近战场</h2>
+          </div>
+          <div class="dungeon-report" data-ref="battlefield-report"></div>
+        </div>
         <div class="leveling-head">
           <h2 class="section-title">练级安排</h2>
           <span class="leveling-avg" data-ref="leveling-avg"></span>
@@ -234,6 +250,15 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
           <h2 class="section-title">外快分配</h2>
         </div>
         <ul class="assign-list external-assign-list" data-ref="external-assign-list"></ul>
+        <div class="leveling-head dungeon-head pvp-head">
+          <h2 class="section-title">战场(荣誉)</h2>
+        </div>
+        <p class="leveling-note">满职能小队编入战场队(最多 ${PVP_SETTLEMENT.maxSquadsPerBattlefield} 支)出战分梯度战场,每日自动开打;胜负皆得荣誉点,军衔随生涯荣誉晋升 —— 军装兑换在「金库·荣誉」页。</p>
+        <ul class="map-list battlefield-list" data-ref="battlefield-list"></ul>
+        <div class="pool-head assign-head">
+          <h2 class="section-title">战场分配</h2>
+        </div>
+        <ul class="assign-list battlefield-assign-list" data-ref="battlefield-assign-list"></ul>
       </section>
       <section class="pane" data-pane="world" hidden>
         <div class="world-overview" data-ref="world-overview"></div>
@@ -283,6 +308,20 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
             <span class="pool-sub" data-ref="wallet-sub"></span>
           </div>
           <ul class="wallet-list" data-ref="wallet-list"></ul>
+        </div>
+        <div class="pvp-honor-panel">
+          <div class="pool-head">
+            <h2 class="section-title">荣誉阶梯</h2>
+            <span class="pool-sub" data-ref="pvp-honor-sub"></span>
+          </div>
+          <div class="renown-card" data-ref="pvp-honor-card"></div>
+        </div>
+        <div class="pvp-gear-panel">
+          <div class="pool-head">
+            <h2 class="section-title">军装兑换</h2>
+            <span class="pool-sub">荣誉点换 PvP 装备,兑换即穿上;战场向属性只在战场结算计入</span>
+          </div>
+          <div class="pvp-gear-wrap" data-ref="pvp-gear-wrap"></div>
         </div>
         <div class="renown-panel" data-ref="renown-card"></div>
         <div class="honor-panel">
@@ -358,12 +397,19 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
   const dungeonAssignListEl = requireElement<HTMLUListElement>(root, 'dungeon-assign-list');
   const externalListEl = requireElement<HTMLUListElement>(root, 'external-list');
   const externalAssignListEl = requireElement<HTMLUListElement>(root, 'external-assign-list');
+  const battlefieldListEl = requireElement<HTMLUListElement>(root, 'battlefield-list');
+  const battlefieldAssignListEl = requireElement<HTMLUListElement>(root, 'battlefield-assign-list');
+  const battlefieldReportWrapEl = requireElement<HTMLDivElement>(root, 'battlefield-report-wrap');
+  const battlefieldReportEl = requireElement<HTMLDivElement>(root, 'battlefield-report');
   const vaultBalanceEl = requireElement<HTMLDivElement>(root, 'vault-balance');
   const lootSystemListEl = requireElement<HTMLUListElement>(root, 'loot-system-list');
   const selfDealPanelEl = requireElement<HTMLDivElement>(root, 'self-deal-panel');
   const walletSubEl = requireElement<HTMLSpanElement>(root, 'wallet-sub');
   const walletListEl = requireElement<HTMLUListElement>(root, 'wallet-list');
   const renownCardEl = requireElement<HTMLDivElement>(root, 'renown-card');
+  const pvpHonorSubEl = requireElement<HTMLSpanElement>(root, 'pvp-honor-sub');
+  const pvpHonorCardEl = requireElement<HTMLDivElement>(root, 'pvp-honor-card');
+  const pvpGearWrapEl = requireElement<HTMLDivElement>(root, 'pvp-gear-wrap');
   const honorSubEl = requireElement<HTMLSpanElement>(root, 'honor-sub');
   const honorWallEl = requireElement<HTMLDivElement>(root, 'honor-wall');
   const hallSubEl = requireElement<HTMLSpanElement>(root, 'hall-sub');
@@ -633,6 +679,59 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
       };
       options.dispatch({ command, deltaGameMinutes: 0 });
     }
+  });
+
+  // 战场分配操作(T16,日程页):只是把「编入战场队/撤出」转交给门面裁决
+  // (解锁、满职能与战场队 3 支上限的校验一律在 sim;此处只做展示性禁用)
+  battlefieldAssignListEl.addEventListener('click', (event) => {
+    const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-action]');
+    if (button === null || button.disabled) {
+      return;
+    }
+    const row = button.closest<HTMLElement>('[data-squad-id]');
+    if (row === null) {
+      return;
+    }
+    const squadId = Number(row.dataset.squadId);
+    if (button.dataset.action === 'stop-battlefield') {
+      options.dispatch({ command: { type: 'stopBattlefield', squadId }, deltaGameMinutes: 0 });
+      return;
+    }
+    if (button.dataset.action === 'assign-battlefield') {
+      const select = row.querySelector<HTMLSelectElement>('select');
+      if (select === null || select.value === '') {
+        return;
+      }
+      options.dispatch({
+        command: { type: 'assignBattlefield', squadId, battlefieldId: select.value },
+        deltaGameMinutes: 0,
+      });
+    }
+  });
+
+  // 军装兑换操作(T16,金库·荣誉页):先选团员再点部位;军衔门槛、荣誉点余额
+  // 与单件有效性的裁决一律在 sim,此处只做展示性禁用与提示
+  let redeemMemberId: number | null = null;
+  pvpGearWrapEl.addEventListener('change', (event) => {
+    const select = event.target as HTMLSelectElement;
+    if (!select.matches('select[data-role="redeem-member"]')) {
+      return;
+    }
+    const value = Number(select.value);
+    redeemMemberId = Number.isFinite(value) && value > 0 ? value : null;
+    if (latestState !== null) {
+      renderVault(latestState); // 换人重算各部位现值对比,纯展示刷新
+    }
+  });
+  pvpGearWrapEl.addEventListener('click', (event) => {
+    const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-action="redeem-honor-gear"]');
+    if (button === null || button.disabled || redeemMemberId === null) {
+      return;
+    }
+    options.dispatch({
+      command: { type: 'redeemHonorGear', memberId: redeemMemberId, gearId: button.dataset.gearId! },
+      deltaGameMinutes: 0,
+    });
   });
 
   // 金库·荣誉页操作(换制/自肥):转交门面裁决 —— 成本校验与忠诚摩擦都在 sim;
@@ -1292,9 +1391,8 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
       externalAssignListEl.replaceChildren(
         el('li', 'empty-hint', '还没有小队 —— 外快以小队为单位出坞,先去「编成」页建队。'),
       );
-      return;
-    }
-    externalAssignListEl.replaceChildren(
+    } else {
+      externalAssignListEl.replaceChildren(
       ...state.squads.map((squad, index) => {
         const current = squadExternalActivity(squad);
         const readiness = squadDungeonReadiness(squad, state.members);
@@ -1342,7 +1440,171 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
         }
         return row;
       }),
+      );
+    }
+
+    // ———— 战场(T16,GLOSSARY:战场/荣誉阶梯):梯度卡 + 战场分配行 ————
+
+    // 战场一览:梯度与荣誉产出标示,未解锁给出未达标项(判定在 sim,此处只渲染)
+    const battlefieldStates = battlefieldStatuses(state.members);
+    battlefieldListEl.replaceChildren(
+      ...battlefieldStates.map(({ def, unlocked, unmet }) => {
+        const card = el('li', `map-card battlefield-card${unlocked ? '' : ' map-locked'}`);
+        const head = el('div', 'map-head');
+        head.append(el('span', 'map-name', def.name));
+        head.append(el('span', 'map-tier map-tier-pvp', `第 ${def.gradient} 梯`));
+        head.append(
+          el('span', 'map-band', `门槛 Lv≥${def.unlock.averageLevel} · 装等≥${def.unlock.averageItemLevel}`),
+        );
+        card.append(head);
+        card.append(el('p', 'map-desc', def.description));
+        card.append(
+          el(
+            'div',
+            'map-stats',
+            `敌方强度 ${def.difficultyTarget} · 每日 ${def.battlesPerDay} 场 · 荣誉 胜 +${def.honorPerWin}/败 +${def.honorPerLoss} · 疲劳 +${def.fatiguePerBattle}/场`,
+          ),
+        );
+        if (!unlocked) {
+          card.append(
+            el(
+              'div',
+              'map-lock',
+              `未解锁 —— 需${unmet.join('、')}(当前 等级 ${averageLevel} · 装等 ${averageItemLevel})`,
+            ),
+          );
+        }
+        return card;
+      }),
     );
+
+    // 战场分配行:选择已解锁战场编入战场队(队内最多 3 支小队,计数只读状态),或撤出休整
+    const unlockedBattlefields = battlefieldStates.filter((status) => status.unlocked);
+    if (state.squads.length === 0) {
+      battlefieldAssignListEl.replaceChildren(
+        el('li', 'empty-hint', '还没有小队 —— 战场队由 2–3 支满职能小队编成,先去「编成」页建队。'),
+      );
+    } else {
+      battlefieldAssignListEl.replaceChildren(
+        ...state.squads.map((squad, index) => {
+          const current = squadBattlefield(squad);
+          const readiness = squadDungeonReadiness(squad, state.members);
+          const row = el('li', 'assign-row');
+          row.dataset.squadId = String(squad.id);
+
+          const info = el('div', 'assign-info');
+          info.append(el('span', 'assign-name', `第 ${index + 1} 小队(${squad.memberIds.length}/${COMP.squadSize})`));
+          if (current !== undefined) {
+            const teamCount = battlefieldSquadCount(state.squads, current.id);
+            info.append(
+              el(
+                'span',
+                'assign-status assign-status-active',
+                `战场中:${current.name}(第 ${current.gradient} 梯,战场队 ${teamCount}/${PVP_SETTLEMENT.maxSquadsPerBattlefield})`,
+              ),
+            );
+          } else if (!readiness.ready) {
+            info.append(el('span', 'assign-status assign-status-blocked', `编成不齐:${readiness.reasons.join('、')}`));
+          } else {
+            info.append(el('span', 'assign-status', '休整中 · 可随时编入战场队'));
+          }
+          row.append(info);
+
+          if (unlockedBattlefields.length > 0) {
+            const select = el('select', 'assign-select') as HTMLSelectElement;
+            for (const { def } of unlockedBattlefields) {
+              const teamCount = battlefieldSquadCount(state.squads, def.id);
+              const option = el(
+                'option',
+                undefined,
+                `${def.name}(第 ${def.gradient} 梯,队 ${teamCount}/${PVP_SETTLEMENT.maxSquadsPerBattlefield})`,
+              ) as HTMLOptionElement;
+              option.value = def.id;
+              if (current?.id === def.id) {
+                option.selected = true;
+              }
+              select.append(option);
+            }
+            const go = el('button', 'pool-btn pool-btn-recruit', '编入战场队');
+            go.type = 'button';
+            go.dataset.action = 'assign-battlefield';
+            if (!readiness.ready) {
+              go.disabled = true; // 展示性禁用:真实裁决仍在门面
+              go.title = `编成不齐:${readiness.reasons.join('、')}`;
+            } else if (
+              current === undefined &&
+              unlockedBattlefields.every(
+                ({ def }) => battlefieldSquadCount(state.squads, def.id) >= PVP_SETTLEMENT.maxSquadsPerBattlefield,
+              )
+            ) {
+              go.disabled = true; // 展示性禁用:全部战场队已满 3 支
+              go.title = '各战场队均已满编(3 支小队)';
+            }
+            row.append(select, go);
+          }
+          if (current !== undefined) {
+            const stop = el('button', 'pool-btn pool-btn-reject', '撤出战场');
+            stop.type = 'button';
+            stop.dataset.action = 'stop-battlefield';
+            row.append(stop);
+          }
+          return row;
+        }),
+      );
+    }
+    renderBattlefieldReport(state.lastBattlefieldReport);
+  }
+
+  /** 结果卡:最近一场战场的胜负、三要素与荣誉进账(数据来自状态,规则都在 sim)。 */
+  function renderBattlefieldReport(report: BattlefieldReport | undefined): void {
+    if (report === undefined) {
+      battlefieldReportWrapEl.hidden = true;
+      return;
+    }
+    battlefieldReportWrapEl.hidden = false;
+
+    const card = el('div', `dungeon-report-card${report.victory ? ' report-win' : ' report-fail'}`);
+    const head = el('div', 'report-head');
+    head.append(
+      el(
+        'span',
+        'report-title',
+        `「${report.battlefieldName}」· 第 ${report.gradient} 梯 · 第 ${report.squadOrdinals.join('、')} 小队`,
+      ),
+    );
+    head.append(el('span', 'report-stamp', formatGameStamp(report.atGameMinutes)));
+    card.append(head);
+
+    const banner = el('div', 'report-banner');
+    banner.append(el('span', 'report-verdict', report.victory ? '告捷' : '失利'));
+    banner.append(
+      el(
+        'span',
+        'report-odds',
+        `战力 ${Math.round(report.power)} 对敌方 ${report.target} · 胜率 ${Math.round(report.successChance * 100)}%(${report.band})`,
+      ),
+    );
+    card.append(banner);
+
+    const meta = el('div', 'map-stats battlefield-report-stats');
+    meta.append(
+      el('span', 'effect-chip', `荣誉 +${report.honorGained}(${report.victory ? '胜场' : '安慰'})`),
+    );
+    meta.append(el('span', 'effect-chip', `出战 ${report.teamSize} 人`));
+    meta.append(el('span', 'effect-chip', `军装战场向属性合计 +${report.pvpPowerTotal}`));
+    card.append(meta);
+
+    const lineup = el('ul', 'report-lineup');
+    for (const member of report.members) {
+      const li = el('li', 'report-member');
+      li.append(el('span', 'member-name', member.name));
+      li.append(el('span', 'report-member-role', member.role));
+      li.append(el('span', 'report-member-ilvl', `装等${member.itemLevel}`));
+      lineup.append(li);
+    }
+    card.append(lineup);
+
+    battlefieldReportEl.replaceChildren(card);
   }
 
   /** 团本开团面板(编成页):门槛/团队检查状态 + 开团与取消(裁决一律在 sim)。 */
@@ -2127,7 +2389,13 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
         info.append(el('span', 'queue-squad', `第 ${entry.squadOrdinal} 小队`));
         const title = el('span', 'queue-name');
         const kindClass =
-          entry.kind === '练级' ? 'leveling' : entry.kind === '下本' ? 'dungeon' : 'external';
+          entry.kind === '练级'
+            ? 'leveling'
+            : entry.kind === '下本'
+              ? 'dungeon'
+              : entry.kind === '战场'
+                ? 'pvp'
+                : 'external';
         title.append(el('span', `queue-kind queue-kind-${kindClass}`, entry.kind));
         title.append(document.createTextNode(entry.name));
         info.append(title);
@@ -2140,7 +2408,9 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
               ? `${entry.tier}区 · 经验 ${entry.perDay}/日`
               : entry.kind === '下本'
                 ? `${entry.tier}档 · 每日 ${entry.perDay} 次`
-                : `${entry.perDay} 金/人·日(个人金)`,
+                : entry.kind === '战场'
+                  ? `${entry.tier} · 每日 ${entry.perDay} 场`
+                  : `${entry.perDay} 金/人·日(个人金)`,
           ),
         );
         return row;
@@ -2390,10 +2660,145 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
       }),
     );
 
-    // 声望卡 + 荣誉墙 + 名人堂(T12):全部只读状态与 sim 派生量
+    // 荣誉阶梯 + 军装兑换(T16)+ 声望卡 + 荣誉墙 + 名人堂:全部只读状态与 sim 派生量
+    renderHonorLadder(state);
+    renderHonorGear(state);
     renderRenownCard(state);
     renderHonorWall(state);
     renderHallOfFame(state);
+  }
+
+  /** 荣誉阶梯卡(T16):当前军衔 + 晋升进度 + 荣誉点余额 + 军衔记录(派生量来自 sim/pvp)。 */
+  function renderHonorLadder(state: GameState): void {
+    const rung = honorRankRung(state.honor.career);
+    const rank = honorRankOf(rung);
+    const next = nextHonorRank(rung);
+
+    const card = el('div', 'renown-card pvp-honor-card');
+    const head = el('div', 'pool-head');
+    head.append(el('h2', 'section-title', '军衔'));
+    head.append(
+      el(
+        'span',
+        'pool-sub',
+        `荣誉点 ${state.honor.points}(可花)· 生涯荣誉 ${state.honor.career}(只增不减,兑换不降衔)`,
+      ),
+    );
+    card.append(head);
+
+    const titleRow = el('div', 'renown-title');
+    titleRow.append(el('span', 'renown-tier-name', rank.name));
+    titleRow.append(el('span', 'renown-stars', `第 ${rung + 1}/${HONOR_RANKS.length} 阶`));
+    card.append(titleRow);
+    card.append(el('p', 'renown-blurb', rank.blurb));
+
+    // 晋升进度:当前生涯荣誉距下一阶(满阶显示封顶;门槛与换算都在 sim)
+    if (next === undefined) {
+      card.append(el('p', 'renown-progress', `生涯荣誉 ${state.honor.career} —— 已至顶阶,军功簿写满。`));
+    } else {
+      const gained = state.honor.career - rank.threshold;
+      const needed = next.threshold - rank.threshold;
+      const track = el('div', 'vital-track renown-track');
+      const fill = el('div', 'vital-fill');
+      fill.style.width = `${clampPercent(Math.floor((gained / needed) * 100))}%`;
+      track.append(fill);
+      const row = el('div', 'renown-progress-row');
+      row.append(track);
+      row.append(el('span', 'renown-progress-text', `${gained}/${needed} → ${next.name}`));
+      card.append(row);
+    }
+
+    // 军衔记录陈列在荣誉墙(DESIGN:荣誉墙含军衔记录);此处只给晋升计数
+    pvpHonorSubEl.textContent =
+      state.honorWall.rankLadder.length > 0
+        ? `已晋升 ${state.honorWall.rankLadder.length} 阶(记录见荣誉墙)`
+        : '战场胜负积累生涯荣誉,跨过门槛即晋升(记录入荣誉墙)';
+    pvpHonorCardEl.replaceChildren(card);
+  }
+
+  /** 军装兑换面板(T16):选团员 + 套装 × 部位兑换;军衔/余额裁决在 sim,此处只展示。 */
+  function renderHonorGear(state: GameState): void {
+    const rungOrder = honorRankRung(state.honor.career) + 1;
+
+    // 团员选择器(默认保持上次选择;不在名册时回落第一名)
+    const valid = state.members.some((member) => member.id === redeemMemberId);
+    if (!valid) {
+      redeemMemberId = state.members[0]?.id ?? null;
+    }
+    const select = el('select', 'assign-select pvp-gear-member') as HTMLSelectElement;
+    select.dataset.role = 'redeem-member';
+    for (const member of state.members) {
+      const option = el(
+        'option',
+        undefined,
+        `${member.name}(装等 ${averageItemLevel(member)}${member.isChairman ? ' · 会长' : ''})`,
+      ) as HTMLOptionElement;
+      option.value = String(member.id);
+      if (member.id === redeemMemberId) {
+        option.selected = true;
+      }
+      select.append(option);
+    }
+    const pickRow = el('div', 'pvp-gear-pick');
+    pickRow.append(el('span', 'pvp-gear-pick-label', '穿给谁:'));
+    if (state.members.length === 0) {
+      pickRow.append(el('span', 'empty-hint', '名册为空。'));
+      pvpGearWrapEl.replaceChildren(pickRow);
+      return;
+    }
+    pickRow.append(select);
+    pvpGearWrapEl.replaceChildren(pickRow);
+
+    const member = state.members.find((m) => m.id === redeemMemberId);
+    for (const set of HONOR_GEAR_SETS) {
+      const rankOk = rungOrder >= set.requiredRankOrder;
+      const requiredRank = HONOR_RANKS[set.requiredRankOrder - 1];
+      const card = el('div', `loot-system-card pvp-gear-card${rankOk ? '' : ' pvp-gear-locked'}`);
+      const head = el('div', 'loot-system-head');
+      head.append(el('span', `gear-quality ${QUALITY_CLASS[set.quality]}`, set.quality));
+      head.append(el('span', 'loot-system-name', set.name));
+      head.append(
+        el(
+          'span',
+          'loot-system-tag',
+          rankOk ? `已解锁(军衔 ${HONOR_RANKS[rungOrder - 1]!.name})` : `需军衔 ${requiredRank?.name ?? '?'}(当前 ${HONOR_RANKS[rungOrder - 1]?.name ?? '?'})`,
+        ),
+      );
+      card.append(head);
+      card.append(
+        el(
+          'p',
+          'loot-system-desc',
+          `单件 装等 ${set.itemLevel} · 战场向属性 +${set.pvpPower}(只在战场结算计入)· 每件 ${set.costHonor} 荣誉点(余 ${state.honor.points})`,
+        ),
+      );
+
+      // 部位兑换格:显示该团员此部位现值,点击兑换(展示性禁用,裁决在门面)
+      const slots = el('div', 'pvp-gear-slots');
+      for (const slot of GEAR_SLOTS) {
+        const button = el('button', 'pvp-gear-slot') as HTMLButtonElement;
+        button.type = 'button';
+        button.dataset.action = 'redeem-honor-gear';
+        button.dataset.gearId = `${set.id}-${slot}`;
+        const current = member?.gear.find((gear) => gear.slot === slot);
+        button.append(el('span', 'pvp-gear-slot-name', slot));
+        button.append(el('span', 'pvp-gear-slot-ilvl', current ? `现${current.itemLevel}` : '空'));
+        const delta = set.itemLevel - (current?.itemLevel ?? 0);
+        button.append(el('span', `pvp-gear-slot-delta${delta > 0 ? ' report-drop-up' : ''}`, delta > 0 ? `+${delta}` : `${delta}`));
+        if (!rankOk) {
+          button.disabled = true;
+          button.title = `军衔不足:需 ${requiredRank?.name ?? '?'}(生涯荣誉 ${requiredRank?.threshold ?? '?'};当前 ${state.honor.career})`;
+        } else if (state.honor.points < set.costHonor) {
+          button.disabled = true;
+          button.title = `荣誉点不足(需 ${set.costHonor},余 ${state.honor.points})`;
+        } else if (delta <= 0) {
+          button.title = '装等不高于现装,但战场向属性仍会入格 —— 兑换与否由会长裁量';
+        }
+        slots.append(button);
+      }
+      card.append(slots);
+      pvpGearWrapEl.append(card);
+    }
   }
 
   /** 声望卡:档位名 + 星级 + 升阶进度 + 名册上限联动与挖版权限(派生量来自 sim/reputation)。 */
@@ -2448,15 +2853,15 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
     renownCardEl.replaceChildren(card);
   }
 
-  /** 荣誉墙:首杀徽章(带日期)/ 里程碑 / 稀有陈列,全部可追溯(数据来自状态)。 */
+  /** 荣誉墙:首杀徽章(带日期)/ 里程碑 / 稀有陈列 / 军衔记录,全部可追溯(数据来自状态)。 */
   function renderHonorWall(state: GameState): void {
     const wall = state.honorWall;
-    const total = wall.firstKills.length + wall.milestones.length + wall.rareDrops.length;
-    honorSubEl.textContent = `首杀 ${wall.firstKills.length} · 里程碑 ${wall.milestones.length} · 稀有 ${wall.rareDrops.length}`;
+    const total = wall.firstKills.length + wall.milestones.length + wall.rareDrops.length + wall.rankLadder.length;
+    honorSubEl.textContent = `首杀 ${wall.firstKills.length} · 里程碑 ${wall.milestones.length} · 稀有 ${wall.rareDrops.length} · 军衔 ${wall.rankLadder.length}`;
 
     if (total === 0) {
       honorWallEl.replaceChildren(
-        el('p', 'empty-hint', '墙上还空着 —— 首杀一名团本首领、达成里程碑或穿上一件紫装,都会挂上这面墙。'),
+        el('p', 'empty-hint', '墙上还空着 —— 首杀一名团本首领、达成里程碑、穿上一件紫装或晋升一阶军衔,都会挂上这面墙。'),
       );
       return;
     }
@@ -2496,6 +2901,18 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
         row.append(el('span', 'honor-rare-item', `${record.slot} · 装等 ${record.itemLevel}`));
         row.append(el('span', 'honor-rare-dest', `→ ${record.holder}(${record.source})`));
         row.append(el('span', 'honor-stamp', formatGameStamp(record.atGameMinutes)));
+        list.append(row);
+      }
+      frag.append(list);
+    }
+
+    if (wall.rankLadder.length > 0) {
+      frag.append(el('h4', 'honor-section-title', '军衔记录'));
+      const list = el('ul', 'honor-list');
+      for (const badge of [...wall.rankLadder].reverse()) {
+        const row = el('li', 'honor-item honor-milestone');
+        row.append(el('span', 'honor-kill-boss', badge.name));
+        row.append(el('span', 'honor-stamp', formatGameStamp(badge.atGameMinutes)));
         list.append(row);
       }
       frag.append(list);

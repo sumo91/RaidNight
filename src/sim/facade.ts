@@ -1,3 +1,8 @@
+import {
+  BATTLEFIELD_BY_ID,
+  HONOR_GEAR_BY_ID,
+  PVP_SETTLEMENT,
+} from '../content/pvp';
 import { DAILY_FLAVOR_POOL } from '../content/daily-flavor';
 import { COMP } from '../content/comp';
 import { DUNGEON_BY_ID } from '../content/dungeons';
@@ -12,7 +17,7 @@ import {
 } from '../content/raid-tactics';
 import type { GuildCommand } from './commands';
 import { GAME_MINUTES_PER_DAY, GAME_MINUTES_PER_WEEK, gameDay, gameWeek } from './clock';
-import { settleDungeonDay, squadDungeon, squadDungeonReadiness } from './dungeon';
+import { equipItem, settleDungeonDay, squadDungeon, squadDungeonReadiness } from './dungeon';
 import { settleExternalDay, squadExternalActivity } from './economy';
 import type { SimEvent, SimEventKind } from './events';
 import { evaluateUnlockGates } from './ladder';
@@ -34,6 +39,13 @@ import {
   rosterCapForRung,
 } from './reputation';
 import { settleRaidNight, tacticsInvestmentGold } from './raid';
+import {
+  battlefieldSquadCount,
+  honorRankOf,
+  honorRankRung,
+  squadBattlefield,
+  settleBattlefieldDay,
+} from './pvp';
 import { generateApplicantPool } from './recruit';
 import { pickOne } from './rng';
 import { repairCostFactor, settleWorldDay, settleWorldWeek } from './world';
@@ -524,6 +536,95 @@ function applyCommand(state: GameState, command: GuildCommand, collector: EventC
       );
       return { ...state, squads };
     }
+    case 'assignBattlefield': {
+      const index = state.squads.findIndex((squad) => squad.id === command.squadId);
+      if (index === -1) {
+        return state; // 小队不存在:忽略
+      }
+      const def = BATTLEFIELD_BY_ID.get(command.battlefieldId);
+      if (def === undefined) {
+        return state; // 战场不在内容表:忽略
+      }
+      // 内容阶梯门槛(与 5 人本同一双维判定):梯度未解锁不可进入
+      const unlock = evaluateUnlockGates(def.unlock, {
+        averageLevel: guildAverageLevel(state.members),
+        averageItemLevel: guildAverageItemLevel(state.members),
+      });
+      if (!unlock.unlocked) {
+        return state; // 未达标:忽略
+      }
+      // 战场队门槛:满职能小队(与下本/外快同一门槛)才可编入
+      const readiness = squadDungeonReadiness(state.squads[index]!, state.members);
+      if (!readiness.ready) {
+        return state; // 编成不齐:忽略(编成页会标示缺口)
+      }
+      if (squadBattlefield(state.squads[index]!)?.id === def.id) {
+        return state; // 已在该战场:无变化、无事件
+      }
+      // 战场队 = 2–3 小队(DESIGN「编成」):已满 3 支不可再编
+      const teamSize = battlefieldSquadCount(state.squads, def.id);
+      if (teamSize >= PVP_SETTLEMENT.maxSquadsPerBattlefield) {
+        return state; // 战场队已满:忽略
+      }
+      collector.push(
+        state.clockGameMinutes,
+        '战场',
+        `第 ${index + 1} 小队编入战场队,进驻「${def.name}」(第 ${def.gradient} 梯度,${teamSize + 1}/${PVP_SETTLEMENT.maxSquadsPerBattlefield} 支小队)—— 每日自动开打 ${def.battlesPerDay} 场,胜负皆得荣誉。`,
+      );
+      const squads = state.squads.map((squad, i) =>
+        i === index
+          ? { ...squad, activity: { type: 'battlefield' as const, battlefieldId: def.id } }
+          : squad,
+      );
+      return { ...state, squads };
+    }
+    case 'stopBattlefield': {
+      const index = state.squads.findIndex((squad) => squad.id === command.squadId);
+      if (index === -1 || squadBattlefield(state.squads[index]!) === undefined) {
+        return state; // 小队不存在或本就没有战场安排:忽略
+      }
+      collector.push(state.clockGameMinutes, '战场', `第 ${index + 1} 小队撤出战场,回城休整。`);
+      const squads = state.squads.map((squad, i) =>
+        i === index ? { ...squad, activity: undefined } : squad,
+      );
+      return { ...state, squads };
+    }
+    case 'redeemHonorGear': {
+      const member = state.members.find((m) => m.id === command.memberId);
+      const gear = HONOR_GEAR_BY_ID.get(command.gearId);
+      if (member === undefined || gear === undefined) {
+        return state; // 团员不存在或军装不在内容表:忽略
+      }
+      // 军衔门槛(GLOSSARY:荣誉阶梯):生涯荣誉未到军衔阶,兑不了
+      const rankOrder = honorRankRung(state.honor.career) + 1;
+      if (rankOrder < gear.requiredRankOrder) {
+        return state; // 军衔不足:忽略
+      }
+      if (state.honor.points < gear.costHonor) {
+        return state; // 荣誉点不足:忽略
+      }
+      // 兑换即穿上:换装走全项目唯一入口(战场向属性随之入格)
+      const members = state.members.map((m) =>
+        m.id === member.id
+          ? equipItem(m, {
+              slot: gear.slot,
+              quality: gear.quality,
+              itemLevel: gear.itemLevel,
+              pvpPower: gear.pvpPower,
+            })
+          : m,
+      );
+      collector.push(
+        state.clockGameMinutes,
+        '战场',
+        `军装兑换:「${member.name}」花 ${gear.costHonor} 荣誉点穿上「${gear.name}」(装等 ${gear.itemLevel},战场向属性 +${gear.pvpPower};荣誉点余 ${state.honor.points - gear.costHonor})。`,
+      );
+      return {
+        ...state,
+        members,
+        honor: { ...state.honor, points: state.honor.points - gear.costHonor },
+      };
+    }
     case 'setLootSystem': {
       const def = LOOT_SYSTEM_BY_ID.get(command.system);
       if (def === undefined || def.id === state.economy.system) {
@@ -695,6 +796,8 @@ function advanceClock(state: GameState, delta: number, collector: EventCollector
   let applicants = state.applicants;
   let nextApplicationId = state.nextApplicationId;
   let lastDungeonRun = state.lastDungeonRun;
+  let honor = state.honor;
+  let lastBattlefieldReport = state.lastBattlefieldReport;
   let vault = state.vault;
   let economy = state.economy;
   let renownPoints = state.renownPoints;
@@ -709,10 +812,10 @@ function advanceClock(state: GameState, delta: number, collector: EventCollector
 
   // 逐个跨越的边界结算;游戏周边界必是游戏日边界(分钟数整除)。
   // 日界结算顺序固定:日更文案 → 申请池刷新(→ 虚拟服务器日结算:行情波/抢苗子)
-  // → 练级/休整 → 下本结算 → 外快结算(自动层)
+  // → 练级/休整 → 下本结算 → 外快结算 → 战场结算(T16,自动层)
   // →(周界)团本夜整夜结算 → 周更(团本 CD 重置)
-  // → 声望与荣誉(T12 尾声,确定性不消费随机链):冷板凳计数 → 稀有入墙 → 首杀
-  //   → 里程碑 → 阶位/名册上限 → 自动退会
+  // → 声望与荣誉(T12,确定性不消费随机链):冷板凳计数 → 稀有入墙 → 首杀
+  //   → 里程碑 → 军衔晋升(T16)→ 阶位/名册上限 → 自动退会
   // →(周界)虚拟服务器周结算(T13,不消费随机链):玩家服务器首杀 → 橡皮筋
   //   (竞争公会推进/超车)→ 排名名次段新闻。
   for (;;) {
@@ -772,6 +875,22 @@ function advanceClock(state: GameState, delta: number, collector: EventCollector
       emit: (text) => collector.push(nextAt, '经济', text),
     });
     members = externalDay.members;
+
+    // 战场结算(自动层,T16,短日志 + 结果卡):战场队的逐场胜负与荣誉进账
+    // (军衔晋升在下方荣誉结算段按结算后的荣誉账本推导,与首杀入墙同一编排)
+    const honorCareerAtDayStart = honor.career;
+    const battlefieldDay = settleBattlefieldDay({
+      members,
+      squads,
+      honor,
+      rngState,
+      atGameMinutes: nextAt,
+      emit: (text) => collector.push(nextAt, '战场', text),
+    });
+    members = battlefieldDay.members;
+    honor = battlefieldDay.honor;
+    rngState = battlefieldDay.rngState;
+    lastBattlefieldReport = battlefieldDay.lastReport ?? lastBattlefieldReport;
 
     if (nextAt === nextWeekAt) {
       // 团本夜(计划层):开团安排在周边界整夜结算(直播视图数据 + 战斗日志);
@@ -889,6 +1008,24 @@ function advanceClock(state: GameState, delta: number, collector: EventCollector
       }
     }
 
+    // 荣誉阶梯军衔晋升(T16,GLOSSARY:荣誉阶梯):生涯荣誉跨过门槛 ⇒ 军衔记录入墙
+    // (同一日跨多阶则逐阶补记;兑换军装只花荣誉点、不动生涯荣誉,不降衔)
+    const honorRungBefore = honorRankRung(honorCareerAtDayStart);
+    const honorRungAfter = honorRankRung(honor.career);
+    if (honorRungAfter > honorRungBefore) {
+      const badges = [];
+      for (let rung = honorRungBefore + 1; rung <= honorRungAfter; rung++) {
+        const rank = honorRankOf(rung);
+        badges.push({ rankId: rank.id, name: rank.name, atGameMinutes: nextAt });
+        collector.push(
+          nextAt,
+          '战场',
+          `军衔晋升:「${rank.name}」—— 生涯荣誉 ${honor.career}(荣誉阶梯第 ${rung + 1} 阶:${rank.blurb})`,
+        );
+      }
+      honorWall = { ...honorWall, rankLadder: [...honorWall.rankLadder, ...badges] };
+    }
+
     // 阶位提升:档位与星级可见;跨档时名册上限随之扩容(只升不降),档位解锁挖角一并公告
     const rungAfter = renownRung(renownPoints);
     if (rungAfter > rungBefore) {
@@ -951,6 +1088,8 @@ function advanceClock(state: GameState, delta: number, collector: EventCollector
     applicants,
     nextApplicationId,
     lastDungeonRun,
+    honor,
+    lastBattlefieldReport,
     vault,
     economy,
     renownPoints,

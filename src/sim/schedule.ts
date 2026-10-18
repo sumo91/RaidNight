@@ -10,6 +10,7 @@ import { GAME_MINUTES_PER_DAY, GAME_MINUTES_PER_WEEK } from './clock';
 import { squadDungeon } from './dungeon';
 import { externalActivityKindLabel, squadExternalActivity } from './economy';
 import { squadLevelingMap } from './leveling';
+import { squadBattlefield } from './pvp';
 import type { GameState } from './state';
 
 /** 活动队列条目:一支小队已排的自动层活动(GLOSSARY:自动层/已排活动)。 */
@@ -17,13 +18,13 @@ export interface ActivityEntry {
   readonly squadId: number;
   /** 第几小队(1 起,按编成顺序) */
   readonly squadOrdinal: number;
-  /** '练级' = 进驻练级地图;'下本' = 进驻 5 人本;'打工'/'野团' = 外快(收入归个人金) */
-  kind: '练级' | '下本' | '打工' | '野团';
-  /** 内容名(地图名/副本名/外快名) */
+  /** '练级' = 进驻练级地图;'下本' = 进驻 5 人本;'打工'/'野团' = 外快(收入归个人金);'战场' = 进驻 PvP(T16) */
+  kind: '练级' | '下本' | '打工' | '野团' | '战场';
+  /** 内容名(地图名/副本名/外快名/战场名) */
   readonly name: string;
-  /** 高效/休闲(练级)、普通/高级/困难/英雄(下本)或 外快 */
+  /** 高效/休闲(练级)、普通/高级/困难/英雄(下本)、外快或「第 N 梯」(战场) */
   readonly tier: string;
-  /** 每游戏日的结算量:练级 = 每日经验;下本 = 每日次数;外快 = 每人每日个人金收入 */
+  /** 每游戏日的结算量:练级 = 每日经验;下本 = 每日次数;外快 = 每人每日个人金收入;战场 = 每日场次 */
   readonly perDay: number;
 }
 
@@ -67,6 +68,18 @@ export function activityQueue(state: GameState): readonly ActivityEntry[] {
         name: external.name,
         tier: '外快',
         perDay: external.goldPerMemberPerDay,
+      });
+      return;
+    }
+    const battlefield = squadBattlefield(squad);
+    if (battlefield !== undefined) {
+      entries.push({
+        squadId: squad.id,
+        squadOrdinal: index + 1,
+        kind: '战场',
+        name: battlefield.name,
+        tier: `第 ${battlefield.gradient} 梯`,
+        perDay: battlefield.battlesPerDay,
       });
     }
   });

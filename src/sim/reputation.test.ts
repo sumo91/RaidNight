@@ -453,7 +453,7 @@ describe('存档兼容:声望面随 v8 落盘(验收标准 3 的持久面)', () 
     const v7File = JSON.stringify({ version: 7, state: legacyState });
     const migrated = decodeSave(v7File)!;
     expect(migrated.renownPoints).toBe(0);
-    expect(migrated.honorWall).toEqual({ firstKills: [], milestones: [], rareDrops: [] });
+    expect(migrated.honorWall).toEqual({ firstKills: [], milestones: [], rareDrops: [], rankLadder: [] });
     expect(migrated.hallOfFame).toEqual([]);
     expect(migrated.members.every((member) => member.bossKills === 0 && member.rareLootWon === 0 && member.joinedAtGameMinutes === 0 && member.benchDays === 0)).toBe(true);
     // 迁移后直接可玩

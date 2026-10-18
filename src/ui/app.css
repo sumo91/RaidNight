@@ -2700,3 +2700,92 @@ button.tactic-opt:hover:not(:disabled) {
   color: var(--muted);
   font-size: 12px;
 }
+
+/* ———— PvP(T16):战场徽标 + 荣誉阶梯 + 军装兑换 ———— */
+
+/* 战场:绛红色徽标(荣誉与厮杀的颜色) */
+.map-tier-pvp {
+  color: #e0a3b8;
+  border-color: #6b3040;
+  background: #361822;
+}
+
+.queue-kind-pvp {
+  color: #e0a3b8;
+  background: #361822;
+  border: 1px solid #6b3040;
+}
+
+.battlefield-report-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.pvp-head {
+  margin-top: 16px;
+}
+
+/* 军装兑换:选人行 + 套装卡(复用分配制度卡的骨架)+ 部位兑换格 */
+.pvp-gear-pick {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0 12px;
+}
+
+.pvp-gear-pick-label {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.pvp-gear-card {
+  margin-bottom: 12px;
+}
+
+.pvp-gear-locked {
+  opacity: 0.72;
+}
+
+.pvp-gear-slots {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.pvp-gear-slot {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 4px;
+  font-size: 11.5px;
+  color: var(--ink);
+  background: #1a1622;
+  border: 1px solid #3a3148;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.pvp-gear-slot:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.pvp-gear-slot:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.pvp-gear-slot-name {
+  font-weight: 600;
+}
+
+.pvp-gear-slot-ilvl {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.pvp-gear-slot-delta {
+  font-variant-numeric: tabular-nums;
+}

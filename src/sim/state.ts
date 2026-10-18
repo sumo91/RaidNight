@@ -81,7 +81,7 @@ export interface Squad {
   readonly activity?: SquadActivity;
 }
 
-/** 小队活动:练级(进驻地图)/ 下本(进驻 5 人本)/ 外快(打工/野团);后续工单在此扩展类型。 */
+/** 小队活动:练级(进驻地图)/ 下本(进驻 5 人本)/ 外快(打工/野团)/ 战场(进驻 PvP);后续工单在此扩展类型。 */
 export type SquadActivity =
   /** 练级:进驻某张练级地图,自动层逐日结算 */
   | { readonly type: 'leveling'; readonly mapId: string }
@@ -90,13 +90,20 @@ export type SquadActivity =
   /** G团打工:整队出坞替别家金团出力,收入归个人金(规则见 sim/economy.ts) */
   | { readonly type: 'carry' }
   /** 野团:整队跑临时混合团,收入归个人金(规则见 sim/economy.ts) */
-  | { readonly type: 'wildRaid' };
+  | { readonly type: 'wildRaid' }
+  /** 战场:编入战场队进驻某梯度战场,自动层逐日结算(规则见 sim/pvp.ts,T16) */
+  | { readonly type: 'battlefield'; readonly battlefieldId: string };
 
-/** 单件装备:部位 + 品质 + 装等(物品表见后续装备工单)。 */
+/**
+ * 单件装备:部位 + 品质 + 装等(物品表见后续装备工单)。
+ * pvpPower = 军装的战场向属性(T16):只在战场结算计入战力,PvE 结算不计。
+ */
 export interface GearItem {
   readonly slot: GearSlot;
   readonly quality: Quality;
   readonly itemLevel: number;
+  /** 战场向属性加成(军装才有;缺省 = 无)。 */
+  readonly pvpPower?: number;
 }
 
 /** 一件掉落的去向:5 人本为自动择优穿戴;团本按分配制度归属(经济字段见 sim/economy.ts)。 */
@@ -140,6 +147,35 @@ export interface DungeonRunReport {
   readonly members: readonly { readonly name: string; readonly role: string; readonly itemLevel: number }[];
   /** 本次掉落与去向(失败为空数组) */
   readonly drops: readonly DropOutcome[];
+}
+
+/**
+ * 一次战场结算的结果卡数据(T16,结构化快照;过程要点同时以「战场」事件进短日志)。
+ * 演出级别(DESIGN「三级演出」):战场 = 结果卡 + 短日志(与 5 人本同级)。
+ */
+export interface BattlefieldReport {
+  readonly battlefieldId: string;
+  readonly battlefieldName: string;
+  /** 梯度(1 起;GLOSSARY:分梯度)。 */
+  readonly gradient: number;
+  readonly atGameMinutes: number;
+  /** 本场胜负。 */
+  readonly victory: boolean;
+  /** 结算三要素快照:战场队战力(含军装战场向属性)/ 难度目标 / 成功概率 / 三段式区间。 */
+  readonly power: number;
+  readonly target: number;
+  readonly successChance: number;
+  readonly band: EncounterBand;
+  /** 出战小队序号(1 起,按编成顺序)。 */
+  readonly squadOrdinals: readonly number[];
+  /** 出战人数(战场队 = 2–3 小队)。 */
+  readonly teamSize: number;
+  /** 军装战场向属性合计(战力刻度;军装价值的可观察面)。 */
+  readonly pvpPowerTotal: number;
+  /** 本场荣誉进账(胜 = honorPerWin,败 = honorPerLoss)。 */
+  readonly honorGained: number;
+  /** 参战名单快照(结算时刻的名字/职能/装等,含战场向属性后的有效装等)。 */
+  readonly members: readonly { readonly name: string; readonly role: string; readonly itemLevel: number }[];
 }
 
 /** 出勤画像:风格 id(content/attendance)+ 基础出勤率(0-100)。 */
@@ -389,6 +425,8 @@ export interface HonorWall {
   readonly milestones: readonly MilestoneRecord[];
   /** 稀有陈列(按入墙顺序) */
   readonly rareDrops: readonly RareDropRecord[];
+  /** 军衔记录(T16,GLOSSARY:荣誉阶梯;按晋升顺序,每阶只记一次) */
+  readonly rankLadder: readonly HonorRankBadge[];
 }
 
 /**
@@ -416,9 +454,33 @@ export interface HallOfFameEntry {
   readonly rareLootWon: number;
 }
 
+/**
+ * 荣誉账本(T16,GLOSSARY:战场/荣誉阶梯):
+ * points = 可花费荣誉点(战场胜负所得,军装兑换支出);
+ * career = 生涯荣誉累计(只增不减,军衔段位由此派生 —— 兑换军装不降衔)。
+ */
+export interface HonorLedger {
+  /** 可花费荣誉点。 */
+  readonly points: number;
+  /** 生涯荣誉累计(军衔刻度)。 */
+  readonly career: number;
+}
+
+/** 建会(或旧档迁移)时的初始荣誉账本:零荣誉、列兵起家。 */
+export function createInitialHonor(): HonorLedger {
+  return { points: 0, career: 0 };
+}
+
+/** 军衔记录(GLOSSARY:荣誉阶梯;荣誉墙「军衔记录」陈列,晋升即入墙)。 */
+export interface HonorRankBadge {
+  readonly rankId: string;
+  readonly name: string;
+  readonly atGameMinutes: number;
+}
+
 /** 空荣誉墙(建会初始与旧档迁移共用)。 */
 export function createEmptyHonorWall(): HonorWall {
-  return { firstKills: [], milestones: [], rareDrops: [] };
+  return { firstKills: [], milestones: [], rareDrops: [], rankLadder: [] };
 }
 
 /**
@@ -537,6 +599,10 @@ export interface GameState {
   readonly nextApplicationId: number;
   /** 最近一次下本的结果卡数据(结构化;历史过程见事件日志的「下本」条目) */
   readonly lastDungeonRun?: DungeonRunReport;
+  /** 荣誉账本(T16,GLOSSARY:战场/荣誉阶梯):荣誉点 + 生涯荣誉(军衔刻度)。 */
+  readonly honor: HonorLedger;
+  /** 最近一次战场结算的结果卡数据(T16;历史过程见事件日志的「战场」条目) */
+  readonly lastBattlefieldReport?: BattlefieldReport;
   /** 公会金库(GLOSSARY:双钱包的公家一侧)。 */
   readonly vault: GuildVault;
   /** 公会经济:分配制度与自肥(T11,GLOSSARY:分配制度/自肥)。 */
@@ -585,6 +651,8 @@ export function createInitialState(seed: number, guildName?: string): GameState 
     applicants: pool.applicants,
     nextApplicationId: pool.nextApplicationId,
     lastDungeonRun: undefined,
+    honor: createInitialHonor(),
+    lastBattlefieldReport: undefined,
     vault: { gold: VAULT.startingGold, repairSpent: 0, incomeTotal: 0 },
     economy: createInitialEconomy(0),
     raidPlan: undefined,
