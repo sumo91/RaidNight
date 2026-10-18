@@ -243,11 +243,14 @@ describe('申请池:声望阶位真值替换桩值(验收标准 2)', () => {
     expect(specTop.count).toBe(RECRUIT.poolCount.maxCount); // 份数到顶
     expect(specTop.count).toBeGreaterThan(spec0.count);
     expect(specTop.levelRange[0]).toBeGreaterThan(spec0.levelRange[0]); // 等级区间上移
-    expect(facade.state.applicants).toHaveLength(specTop.count);
+    // 次日按满阶规格刷新 8 份;当日恰逢竞争公会的截胡相位日(T13,种子定相位),
+    // 最好的一份被截走 ⇒ 实存 7 份,全服新闻可追溯(招募事件仍宣告 8 份递入)
+    expect(facade.state.applicants).toHaveLength(specTop.count - 1);
     expect(
       facade.state.applicants.every((a) => a.profile.level >= specTop.levelRange[0]),
     ).toBe(true);
     expect(nextDay.events.some((event) => event.kind === '招募' && event.text.includes(`${specTop.count} 名冒险者`))).toBe(true);
+    expect(nextDay.events.some((event) => event.kind === '世界' && event.text.includes('截胡'))).toBe(true);
   });
 
   it('技艺档随阶位倾斜:满阶池的高技艺档权重高于 0 阶池(纯函数,见 recruit.test 详测)', () => {

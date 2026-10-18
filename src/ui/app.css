@@ -2301,3 +2301,255 @@ body {
   color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
+
+/* ———— 世界页(T13,GLOSSARY:虚拟服务器):排名、首杀榜、竞争公会与全服新闻 ———— */
+
+.world-section {
+  margin: 12px 0;
+}
+
+.world-card {
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+}
+
+.world-rank-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.world-rank-position {
+  font-size: 20px;
+  font-weight: 800;
+  color: var(--accent);
+}
+
+.world-rank-sub {
+  flex: 1;
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.world-note {
+  margin: 6px 0 0;
+  font-size: 11.5px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.market-banner {
+  margin-top: 10px;
+  padding: 6px 10px;
+  border: 1px solid #6b5320;
+  border-radius: 8px;
+  background: #2e2410;
+}
+
+.market-banner-text {
+  font-size: 12px;
+  color: var(--accent);
+}
+
+.first-kill-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.first-kill-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  font-size: 12.5px;
+}
+
+.first-kill-mine {
+  border-color: #6b5320;
+}
+
+.first-kill-boss {
+  font-weight: 700;
+  color: var(--text);
+}
+
+.first-kill-raid {
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.first-kill-owner {
+  margin-left: auto;
+  color: #9fb0e0;
+  font-size: 12px;
+}
+
+.first-kill-owner.owner-player {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.rival-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.rival-card {
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  font-size: 12.5px;
+}
+
+.rival-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.rival-name {
+  font-weight: 700;
+  color: var(--text);
+}
+
+.rival-kills {
+  margin-left: auto;
+  font-size: 11.5px;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
+.rival-progress-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0 4px;
+}
+
+.rival-track {
+  flex: 1;
+}
+
+.rival-fill {
+  background: #7d6bb8;
+}
+
+.rival-progress-text {
+  font-size: 11.5px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.rival-style {
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.ranking-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.ranking-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: #191324;
+  font-size: 12.5px;
+}
+
+.ranking-player {
+  background: #2e2410;
+  border: 1px solid #6b5320;
+}
+
+.ranking-position {
+  width: 34px;
+  text-align: right;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.ranking-player .ranking-position {
+  color: var(--accent);
+  font-weight: 800;
+}
+
+.ranking-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ranking-player .ranking-name {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.ranking-kind {
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+}
+
+.ranking-kind.kind-本会 {
+  border-color: #6b5320;
+  color: var(--accent);
+}
+
+.ranking-kind.kind-竞争 {
+  border-color: #4b3b6b;
+  color: #9fb0e0;
+}
+
+.ranking-score {
+  width: 44px;
+  text-align: right;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.world-news-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.news-row {
+  padding: 5px 10px;
+  border-radius: 6px;
+  background: #191324;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text);
+}
+
+.news-row .stamp {
+  margin-right: 4px;
+  font-size: 11px;
+  color: var(--muted);
+}

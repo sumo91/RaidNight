@@ -121,6 +121,11 @@ export interface SettleRaidNightParams {
   readonly rngState: number;
   /** 团本夜时刻(= 游戏周边界;报告与日志的时刻)。 */
   readonly atGameMinutes: number;
+  /**
+   * 团灭修理金系数(缺省 1):虚拟服务器的抬价波进行中 > 1(T13,竞争公会
+   * 扫货 → 修理材料涨价;幅度见 content/world,到期回落 —— 幅度轻、不锁内容)。
+   */
+  readonly repairCostFactor?: number;
   readonly emit: (text: string) => void;
 }
 
@@ -286,11 +291,11 @@ export function settleRaidNight(params: SettleRaidNightParams): SettleRaidNightR
       }
       drops = outcomesOfDrop;
     } else {
-      // 团灭:代价 = 修理金(金库余额封顶)+ 疲劳 + 士气,无永久损失;本夜止步
+      // 团灭:代价 = 修理金(金库余额封顶;抬价波期间按行情系数上浮)+ 疲劳 + 士气,无永久损失;本夜止步
       fallen = team.teamSize;
       const repairGold = Math.min(
         currentVault.gold,
-        RAID_SETTLEMENT.wipeRepairGoldPerRaider * team.teamSize,
+        Math.round(RAID_SETTLEMENT.wipeRepairGoldPerRaider * team.teamSize * (params.repairCostFactor ?? 1)),
       );
       currentVault = {
         gold: currentVault.gold - repairGold,

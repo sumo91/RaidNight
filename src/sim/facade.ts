@@ -30,6 +30,7 @@ import {
 import { settleRaidNight } from './raid';
 import { generateApplicantPool } from './recruit';
 import { pickOne } from './rng';
+import { repairCostFactor, settleWorldDay, settleWorldWeek } from './world';
 import {
   createInitialState,
   normalizeGuildName,
@@ -504,12 +505,16 @@ function advanceClock(state: GameState, delta: number, collector: EventCollector
   let honorWall = state.honorWall;
   let hallOfFame = state.hallOfFame;
   let rosterCap = state.rosterCap;
+  let world = state.world;
 
   // 逐个跨越的边界结算;游戏周边界必是游戏日边界(分钟数整除)。
-  // 日界结算顺序固定:日更文案 → 申请池刷新 → 练级/休整 → 下本结算 → 外快结算(自动层)
+  // 日界结算顺序固定:日更文案 → 申请池刷新(→ 虚拟服务器日结算:行情波/抢苗子)
+  // → 练级/休整 → 下本结算 → 外快结算(自动层)
   // →(周界)团本夜整夜结算 → 周更(团本 CD 重置)
   // → 声望与荣誉(T12 尾声,确定性不消费随机链):冷板凳计数 → 稀有入墙 → 首杀
-  //   → 里程碑 → 阶位/名册上限 → 自动退会。
+  //   → 里程碑 → 阶位/名册上限 → 自动退会
+  // →(周界)虚拟服务器周结算(T13,不消费随机链):玩家服务器首杀 → 橡皮筋
+  //   (竞争公会推进/超车)→ 排名名次段新闻。
   for (;;) {
     const nextDayAt = (Math.floor(cursor / GAME_MINUTES_PER_DAY) + 1) * GAME_MINUTES_PER_DAY;
     const nextWeekAt = (Math.floor(cursor / GAME_MINUTES_PER_WEEK) + 1) * GAME_MINUTES_PER_WEEK;
@@ -531,6 +536,16 @@ function advanceClock(state: GameState, delta: number, collector: EventCollector
     applicants = pool.applicants;
     nextApplicationId = pool.nextApplicationId;
     collector.push(nextAt, '招募', `申请池刷新:${applicants.length} 名冒险者递来了申请。`);
+
+    // 虚拟服务器日结算(T13,GLOSSARY:虚拟服务器;纯确定性不消费随机链):
+    // 行情波(抬价,轻量可感知)与抢苗子(竞争公会截走最好的一份申请,绝不截空);
+    // 全服新闻入事件流
+    const worldDay = settleWorldDay({ world, applicants, atGameMinutes: nextAt });
+    world = worldDay.world;
+    applicants = worldDay.applicants;
+    for (const text of worldDay.news) {
+      collector.push(nextAt, '世界', text);
+    }
 
     // 练级结算(自动层,静默计数):进驻地图的队员成长与积劳,其余无安排者休整
     const day = settleLevelingDay(members, squads, rngState);
@@ -571,6 +586,7 @@ function advanceClock(state: GameState, delta: number, collector: EventCollector
           plan: raidPlan,
           rngState,
           atGameMinutes: nextAt,
+          repairCostFactor: repairCostFactor(world),
           emit: (text) => collector.push(nextAt, '团本', text),
         });
         members = raidNight.members;
@@ -694,6 +710,28 @@ function advanceClock(state: GameState, delta: number, collector: EventCollector
         `「${resignation.member.name}」自动退会(${resignation.reason}):「${entry.farewell}」—— ${entry.destination}。功绩:${hallDeedsLine(entry)}。`,
       );
     }
+
+    // ———— 虚拟服务器周结算(T13,GLOSSARY:服务器与对手)————
+    // 在荣誉结算之后:玩家本夜战果已入荣誉墙,先判玩家的服务器首杀,
+    // 再跑橡皮筋(竞争公会推进/超车)与排名 —— 同一边界玩家优先。
+    if (nextAt === nextWeekAt) {
+      const worldWeek = settleWorldWeek({
+        world,
+        honorWall,
+        guildName: state.guild.name,
+        atGameMinutes: nextAt,
+        tonightKilledBossIds:
+          tonightReport !== undefined
+            ? tonightReport.bosses.filter((boss) => boss.killed).map((boss) => boss.bossId)
+            : [],
+        averageLevel: guildAverageLevel(members),
+        averageItemLevel: guildAverageItemLevel(members),
+      });
+      world = worldWeek.world;
+      for (const text of worldWeek.news) {
+        collector.push(nextAt, '世界', text);
+      }
+    }
   }
 
   return {
@@ -713,6 +751,7 @@ function advanceClock(state: GameState, delta: number, collector: EventCollector
     honorWall,
     hallOfFame,
     rosterCap,
+    world,
   };
 }
 

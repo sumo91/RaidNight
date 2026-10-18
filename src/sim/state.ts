@@ -2,6 +2,7 @@ import { GUILD_NAME_MAX_LENGTH } from './commands';
 import type { EncounterBand } from './encounter';
 import { generateFoundingRoster } from './member-gen';
 import { generateApplicantPool } from './recruit';
+import { createServerWorld } from './world';
 import { DEFAULT_LOOT_SYSTEM, VAULT, type LootSystemId } from '../content/economy';
 import { RECRUIT } from '../content/recruit';
 import type { DepartureReason } from '../content/reputation';
@@ -349,6 +350,88 @@ export function createEmptyHonorWall(): HonorWall {
 }
 
 /**
+ * NPC 公会(GLOSSARY:虚拟服务器中的非玩家公会;分竞争公会与背景公会)。
+ * 建会时按种子确定性生成,随状态落盘;引用内容表处只存名字(数据驱动)。
+ */
+export interface NpcGuild {
+  /** 公会编号(竞争公会 1..N 固定,背景公会随后;仅作稳定排序与去重)。 */
+  readonly id: number;
+  readonly name: string;
+  /** 背景公会(不成长或极缓成长)/ 竞争公会(受橡皮筋约束的成长曲线)。 */
+  readonly kind: 'background' | 'rival';
+  /** 背景公会:排名基础分(极缓成长见 content/world);竞争公会:档内底蕴分。 */
+  readonly baseScore: number;
+  /** 背景公会的极缓成长:每 N 周排名分 +1(0 = 完全静止);竞争公会不用。 */
+  readonly driftWeeks: number;
+  /** 竞争公会:服务器阶梯上的推进位数(已击杀首领的前缀长度,只增不减)。 */
+  readonly ladderProgress: number;
+}
+
+/**
+ * 服务器首杀记录(GLOSSARY:首杀 = 全服首次击杀某团本首领的荣誉记录;
+ * 与荣誉墙的「本会首杀」相互独立 —— 服务器首杀被夺走不影响本会徽章)。
+ */
+export interface ServerFirstKill {
+  readonly bossId: string;
+  readonly raidName: string;
+  readonly bossName: string;
+  /** 首杀归属公会名(玩家公会或 NPC 公会)。 */
+  readonly guildName: string;
+  /** 是否玩家公会夺得(UI 标记与测试断言)。 */
+  readonly byPlayer: boolean;
+  readonly atGameMinutes: number;
+}
+
+/** 全服新闻条目(世界页「全服新闻流」,按发生顺序;超容裁旧)。 */
+export interface ServerNewsItem {
+  readonly atGameMinutes: number;
+  readonly text: string;
+}
+
+/** 抬价波:竞争公会扫货 → 团灭修理金上浮,数个游戏日后自动回落。 */
+export interface MarketWave {
+  /** 剩余游戏日数(每个日界 −1,归零即行情回落)。 */
+  readonly daysLeft: number;
+  /** 掀起行情的公会名。 */
+  readonly guildName: string;
+}
+
+/** 橡皮筋的锚(GLOSSARY:橡皮筋):玩家进度的周快照,停滞判定以此为基准。 */
+export interface RubberBandAnchor {
+  /** 玩家在服务器阶梯上的推进位数(上一周边界快照)。 */
+  readonly ladderProgress: number;
+  /** 公会平均等级快照(任一刻度增长 = 有推进,停滞周清零)。 */
+  readonly averageLevel: number;
+  /** 公会平均装等快照。 */
+  readonly averageItemLevel: number;
+}
+
+/**
+ * 虚拟服务器(GLOSSARY:玩家公会所在的模拟服务器生态):
+ * NPC 公会群 + 全服新闻 + 服务器首杀 + 橡皮筋锚。确定性:公会群由种子生成,
+ * 竞争公会进度只由锚推导(不消费随机链),可序列化、可重放。
+ */
+export interface ServerWorld {
+  readonly guilds: readonly NpcGuild[];
+  readonly news: readonly ServerNewsItem[];
+  readonly serverFirstKills: readonly ServerFirstKill[];
+  /** 橡皮筋锚(上一周边界的玩家进度快照)。 */
+  readonly anchor: RubberBandAnchor;
+  /** 玩家连续停滞的周数(击杀新首领或平均刻度增长即清零)。 */
+  readonly playerStallWeeks: number;
+  /** 玩家历史最佳排名(1 起;0 = 尚未评估,首评不发新闻)。 */
+  readonly bestRank: number;
+  /** 进行中的抬价波(缺省 = 行情平稳)。 */
+  readonly marketWave?: MarketWave;
+  /** 苗子截胡计数(轮换出手的竞争公会)。 */
+  readonly poachCount: number;
+  /** 抬价波的相位(0..period−1,建会种子定):日序 % period === 相位当日掀起。 */
+  readonly marketPhase: number;
+  /** 抢苗子的相位(0..period−1,建会种子定):日序 % period === 相位当日出手。 */
+  readonly poachPhase: number;
+}
+
+/**
  * 游戏状态:门面的状态部分,纯数据、可序列化。
  * 确定性的关键:种子与随机链状态(rngState)都在状态内。
  */
@@ -394,6 +477,8 @@ export interface GameState {
   readonly honorWall: HonorWall;
   /** 名人堂(T12):离会团员的去向与功绩(含会长淘汰,按离会顺序)。 */
   readonly hallOfFame: readonly HallOfFameEntry[];
+  /** 虚拟服务器(T13,GLOSSARY):NPC 公会群 + 全服新闻 + 服务器首杀 + 橡皮筋。 */
+  readonly world: ServerWorld;
   /** 下一个事件序号 */
   readonly nextEventSeq: number;
 }
@@ -432,6 +517,7 @@ export function createInitialState(seed: number, guildName?: string): GameState 
     lastRaidNight: undefined,
     honorWall: createEmptyHonorWall(),
     hallOfFame: [],
+    world: createServerWorld(seed32),
     nextEventSeq: 1,
   };
 }

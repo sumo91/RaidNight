@@ -10,6 +10,7 @@
 
 import { VAULT } from '../content/economy';
 import { createEmptyHonorWall, createInitialEconomy, type GameState } from './state';
+import { createServerWorld } from './world';
 
 /** 存档种类标记:v4 起写入封皮,导入时先验校验(不是本游戏的文件 → 拒绝)。 */
 export const SAVE_KIND = 'wowidle-save';
@@ -33,8 +34,11 @@ export const SAVE_KIND = 'wowidle-save';
  *   与名人堂 hallOfFame;团员新增功绩统计(bossKills/rareLootWon)、入册时刻
  *   (joinedAtGameMinutes)与冷板凳计数(benchDays),旧档一律从 0 补
  *   (申请人画像同步补 —— 招入时画像原样转正,缺字段会在结算中变 NaN)。
+ * - v9(T13):虚拟服务器 —— 状态新增 world(NPC 公会群 + 全服新闻 + 服务器
+ *   首杀 + 橡皮筋锚);旧档按种子补生成公会群,玩家已得的本会首杀按服务器
+ *   首杀结转(署玩家公会名),锚取当前进度与新快照(补档当周不算停滞)。
  */
-export const SAVE_VERSION = 8;
+export const SAVE_VERSION = 9;
 
 /** 版本化存档封皮:v1–v3 的本机旧档没有 kind,读入时视为 legacy。 */
 export interface SaveFile {
@@ -131,6 +135,19 @@ const MIGRATIONS: Readonly<Record<number, Migration>> = {
         : state.applicants,
     };
   },
+  // v8 → v9:补虚拟服务器(按种子生成公会群;已得的本会首杀结转为玩家服务器
+  // 首杀;锚取当前进度 —— 平均刻度锚从 0 起,补档当周按「有推进」处理不算停滞)。
+  // 对伪造/损坏档做访问防御(guild/clock 可能缺):取得到就结转,取不到按新档补
+  8: (state) => ({
+    ...state,
+    world:
+      state.world ??
+      createServerWorld(typeof state.seed === 'number' ? state.seed : 0, {
+        honorWall: state.honorWall,
+        guildName: state.guild?.name,
+        atGameMinutes: typeof state.clockGameMinutes === 'number' ? state.clockGameMinutes : 0,
+      }),
+  }),
 };
 
 /** 编码:状态 → 存档文本(localStorage 值与导出文件内容共用)。 */
@@ -228,7 +245,22 @@ function looksLikeGameState(state: GameState): boolean {
     state.economy === null ||
     typeof state.economy.system !== 'string' ||
     typeof state.economy.selfDealing !== 'boolean' ||
-    typeof state.economy.selfDealtCount !== 'number'
+    typeof state.economy.selfDealtCount !== 'number' ||
+    typeof state.world !== 'object' ||
+    state.world === null ||
+    !Array.isArray(state.world.guilds) ||
+    !Array.isArray(state.world.news) ||
+    !Array.isArray(state.world.serverFirstKills) ||
+    typeof state.world.anchor !== 'object' ||
+    state.world.anchor === null ||
+    typeof state.world.anchor.ladderProgress !== 'number' ||
+    typeof state.world.anchor.averageLevel !== 'number' ||
+    typeof state.world.anchor.averageItemLevel !== 'number' ||
+    typeof state.world.playerStallWeeks !== 'number' ||
+    typeof state.world.bestRank !== 'number' ||
+    typeof state.world.poachCount !== 'number' ||
+    typeof state.world.marketPhase !== 'number' ||
+    typeof state.world.poachPhase !== 'number'
   ) {
     return false;
   }
@@ -251,6 +283,21 @@ function looksLikeGameState(state: GameState): boolean {
         Array.isArray(member.gear),
     ) &&
     state.squads.every((squad) => typeof squad.id === 'number' && Array.isArray(squad.memberIds)) &&
-    state.applicants.every((applicant) => typeof applicant.applicationId === 'number')
+    state.applicants.every((applicant) => typeof applicant.applicationId === 'number') &&
+    state.world.guilds.every(
+      (guild) =>
+        typeof guild.id === 'number' &&
+        typeof guild.name === 'string' &&
+        (guild.kind === 'background' || guild.kind === 'rival') &&
+        typeof guild.baseScore === 'number' &&
+        typeof guild.driftWeeks === 'number' &&
+        typeof guild.ladderProgress === 'number',
+    ) &&
+    state.world.news.every(
+      (item) => typeof item.atGameMinutes === 'number' && typeof item.text === 'string',
+    ) &&
+    state.world.serverFirstKills.every(
+      (kill) => typeof kill.bossId === 'string' && typeof kill.guildName === 'string' && typeof kill.byPlayer === 'boolean',
+    )
   );
 }

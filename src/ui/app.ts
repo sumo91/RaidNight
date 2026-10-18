@@ -13,6 +13,7 @@ import { RAID_BY_ID, RAID_SETTLEMENT } from '../content/raids';
 import { RENOWN_RUNG_COUNT, RENOWN_TIERS } from '../content/reputation';
 import { SKILL_TIER_BY_ID } from '../content/skill-tiers';
 import { TRAIT_BY_ID } from '../content/traits';
+import { RIVAL_GUILD_BY_NAME, WORLD } from '../content/world';
 import { GAME_MINUTES_PER_DAY, GAME_MINUTES_PER_WEEK, gameMinutesToRealMs } from '../sim/clock';
 import type { SimInput } from '../sim/facade';
 import type { SimEvent } from '../sim/events';
@@ -31,6 +32,7 @@ import {
 } from '../sim/reputation';
 import { averageItemLevel, guildAverageItemLevel, guildAverageLevel } from '../sim/roster';
 import { activityQueue, nextRaidNight, nextSettlement } from '../sim/schedule';
+import { serverLadder, serverRanking } from '../sim/world';
 import type {
   DungeonRunReport,
   GameState,
@@ -213,7 +215,36 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
         <ul class="assign-list external-assign-list" data-ref="external-assign-list"></ul>
       </section>
       <section class="pane" data-pane="world" hidden>
-        <p class="empty-hint">「世界」页签在后续工单开放。</p>
+        <div class="world-overview" data-ref="world-overview"></div>
+        <div class="market-banner" data-ref="market-banner" hidden></div>
+        <div class="world-section">
+          <div class="pool-head">
+            <h2 class="section-title">服务器首杀榜</h2>
+            <span class="pool-sub" data-ref="first-kill-sub"></span>
+          </div>
+          <ul class="first-kill-list" data-ref="first-kill-list"></ul>
+        </div>
+        <div class="world-section">
+          <div class="pool-head">
+            <h2 class="section-title">竞争公会</h2>
+            <span class="pool-sub">有成长曲线的高层公会 —— 橡皮筋约束:你推进时他们慢半拍</span>
+          </div>
+          <ul class="rival-list" data-ref="rival-list"></ul>
+        </div>
+        <div class="world-section">
+          <div class="pool-head">
+            <h2 class="section-title">服务器排名</h2>
+            <span class="pool-sub" data-ref="ranking-sub"></span>
+          </div>
+          <ul class="ranking-list" data-ref="ranking-list"></ul>
+        </div>
+        <div class="world-section">
+          <div class="pool-head">
+            <h2 class="section-title">全服新闻</h2>
+            <span class="pool-sub" data-ref="news-sub"></span>
+          </div>
+          <ul class="world-news-list" data-ref="world-news-list"></ul>
+        </div>
       </section>
       <section class="pane" data-pane="vault" hidden>
         <div class="vault-balance" data-ref="vault-balance"></div>
@@ -314,6 +345,15 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
   const honorWallEl = requireElement<HTMLDivElement>(root, 'honor-wall');
   const hallSubEl = requireElement<HTMLSpanElement>(root, 'hall-sub');
   const hallListEl = requireElement<HTMLUListElement>(root, 'hall-list');
+  const worldOverviewEl = requireElement<HTMLDivElement>(root, 'world-overview');
+  const marketBannerEl = requireElement<HTMLDivElement>(root, 'market-banner');
+  const firstKillSubEl = requireElement<HTMLSpanElement>(root, 'first-kill-sub');
+  const firstKillListEl = requireElement<HTMLUListElement>(root, 'first-kill-list');
+  const rivalListEl = requireElement<HTMLUListElement>(root, 'rival-list');
+  const rankingSubEl = requireElement<HTMLSpanElement>(root, 'ranking-sub');
+  const rankingListEl = requireElement<HTMLUListElement>(root, 'ranking-list');
+  const newsSubEl = requireElement<HTMLSpanElement>(root, 'news-sub');
+  const worldNewsListEl = requireElement<HTMLUListElement>(root, 'world-news-list');
 
   // 页签切换:纯展示行为(哪个 pane 可见),不是业务规则
   let activeTab: TabId = 'roster';
@@ -658,6 +698,7 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
     renderSquads(state);
     renderSchedule(state);
     renderVault(state);
+    renderWorld(state);
 
     if (newEvents.length > 0) {
       // 逐条入缓冲:超长离线补结算的一次性事件可达数万条,展开传参会爆调用栈
@@ -2128,6 +2169,134 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
         return card;
       }),
     );
+  }
+
+  // ———— 世界页(T13,GLOSSARY:虚拟服务器):排名、首杀榜、竞争公会动态与全服新闻 ————
+  // 全部只读状态与 sim 派生量(serverRanking/serverLadder);规则一律在 sim/world。
+
+  /** 世界页渲染:概览与玩家排名 → 行情条 → 首杀榜 → 竞争公会 → 排名榜 → 新闻流。 */
+  function renderWorld(state: GameState): void {
+    const world = state.world;
+    const ranking = serverRanking(state);
+    const playerEntry = ranking.entries[ranking.playerRank - 1]!;
+    const ladderLength = serverLadder().length;
+
+    // 概览卡:服务器名 + 公会规模 + 本会排名与进度(数值全部来自派生量)
+    const overview = el('div', 'world-card');
+    const overviewHead = el('div', 'pool-head');
+    overviewHead.append(el('h2', 'section-title', WORLD.serverName));
+    overviewHead.append(el('span', 'pool-sub', `${ranking.total} 支公会同场竞技`));
+    overview.append(overviewHead);
+    const rankRow = el('div', 'world-rank-row');
+    rankRow.append(el('span', 'world-rank-position', `第 ${ranking.playerRank} 位`));
+    rankRow.append(
+      el(
+        'span',
+        'world-rank-sub',
+        `「${state.guild.name}」· 进度分 ${playerEntry.score} · 团本推进 ${playerEntry.ladderProgress}/${ladderLength}`,
+      ),
+    );
+    overview.append(rankRow);
+    overview.append(
+      el(
+        'p',
+        'world-note',
+        '竞争公会受橡皮筋约束:你正常推进时他们慢半拍;长期停滞才会被超车 —— 内容永不锁,本会首杀永远是你的。',
+      ),
+    );
+    worldOverviewEl.replaceChildren(overview);
+
+    // 行情条:抬价波进行中才显示(幅度与天数读自状态与内容表)
+    const wave = world.marketWave;
+    if (wave === undefined) {
+      marketBannerEl.hidden = true;
+    } else {
+      marketBannerEl.hidden = false;
+      marketBannerEl.replaceChildren(
+        el(
+          'span',
+          'market-banner-text',
+          `行情看涨:团灭修理金 +${WORLD.market.repairMarkupPercent}%(「${wave.guildName}」在扫货,还剩 ${wave.daysLeft} 日)`,
+        ),
+      );
+    }
+
+    // 服务器首杀榜:按夺得顺序倒序(最新在前);归属带「本会/竞争」标记
+    firstKillSubEl.textContent = `${world.serverFirstKills.length}/${ladderLength} 名首领已有归属`;
+    if (world.serverFirstKills.length === 0) {
+      firstKillListEl.replaceChildren(
+        el('li', 'empty-hint', '首杀榜还空着 —— 第一个杀死新首领的公会将在全服留名。'),
+      );
+    } else {
+      firstKillListEl.replaceChildren(
+        ...[...world.serverFirstKills].reverse().map((kill) => {
+          const row = el('li', `first-kill-row${kill.byPlayer ? ' first-kill-mine' : ''}`);
+          row.append(el('span', 'first-kill-boss', kill.bossName));
+          row.append(el('span', 'first-kill-raid', kill.raidName));
+          row.append(el('span', `first-kill-owner${kill.byPlayer ? ' owner-player' : ''}`, kill.guildName));
+          row.append(el('span', 'honor-stamp', formatGameStamp(kill.atGameMinutes)));
+          return row;
+        }),
+      );
+    }
+
+    // 竞争公会:推进进度条 + 服务器首杀数 + 行事风格(风格文案在内容表)
+    rivalListEl.replaceChildren(
+      ...world.guilds
+        .filter((guild) => guild.kind === 'rival')
+        .map((guild) => {
+          const def = RIVAL_GUILD_BY_NAME.get(guild.name);
+          const kills = world.serverFirstKills.filter((kill) => kill.guildName === guild.name).length;
+          const card = el('li', 'rival-card');
+          const head = el('div', 'rival-head');
+          head.append(el('span', 'rival-name', guild.name));
+          head.append(el('span', 'rival-kills', `服务器首杀 ${kills}`));
+          card.append(head);
+          const track = el('div', 'vital-track rival-track');
+          const fill = el('div', 'vital-fill rival-fill');
+          fill.style.width = `${clampPercent(Math.floor((guild.ladderProgress / Math.max(1, ladderLength)) * 100))}%`;
+          track.append(fill);
+          const progressRow = el('div', 'rival-progress-row');
+          progressRow.append(track);
+          progressRow.append(el('span', 'rival-progress-text', `${guild.ladderProgress}/${ladderLength}`));
+          card.append(progressRow);
+          card.append(el('p', 'rival-style', def?.style ?? ''));
+          return card;
+        }),
+    );
+
+    // 排名榜:整榜可浏览(竖屏滚动);本会行高亮,竞争/背景带标记
+    const rivalCount = world.guilds.filter((guild) => guild.kind === 'rival').length;
+    rankingSubEl.textContent = `共 ${ranking.total} 会(竞争 ${rivalCount} · 背景 ${ranking.total - 1 - rivalCount})`;
+    rankingListEl.replaceChildren(
+      ...ranking.entries.map((entry, index) => {
+        const row = el('li', `ranking-row${entry.isPlayer ? ' ranking-player' : ''}`);
+        row.append(el('span', 'ranking-position', String(index + 1)));
+        row.append(el('span', 'ranking-name', entry.name));
+        row.append(el('span', `ranking-kind kind-${entry.kind}`, entry.kind));
+        row.append(el('span', 'ranking-score', String(entry.score)));
+        return row;
+      }),
+    );
+
+    // 全服新闻流:最新在前(状态内保留上限由 sim 裁;此处再限显示条数)
+    newsSubEl.textContent = `${world.news.length} 条(保留最近 ${WORLD.newsKeepCount})`;
+    if (world.news.length === 0) {
+      worldNewsListEl.replaceChildren(el('li', 'empty-hint', '服务器刚开,还没有新闻。'));
+    } else {
+      worldNewsListEl.replaceChildren(
+        ...[...world.news]
+          .reverse()
+          .slice(0, 40)
+          .map((item) => {
+            const row = el('li', 'news-row');
+            const stamp = el('span', 'stamp');
+            stamp.textContent = `[${formatGameStamp(item.atGameMinutes)}]`;
+            row.append(stamp, document.createTextNode(item.text));
+            return row;
+          }),
+      );
+    }
   }
 
   /** 待命团员行:选择目标小队并编入(满员禁用是展示行为,裁决在门面)。 */  function renderBenchRow(member: Member, squads: readonly { id: number; memberIds: readonly number[] }[]): HTMLLIElement {
