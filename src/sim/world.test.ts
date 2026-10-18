@@ -32,8 +32,8 @@ const SEED = 20261018;
 const RAID = RAID_BY_ID.get('molten-abyss') as RaidDef;
 const LADDER = serverLadder();
 /** 标准 8 队的战力刻度(独立重算:职能分 27 × 光环 1.19,与 raid.test 同式)。 */
-const FULL_CLEAR_ITEM_LEVEL = 85; // (85+27)×1.19 ≈ 133 ≥ 116+5:末首领必胜 ⇒ 全通确定
-const TWO_KILL_ITEM_LEVEL = 67; // 首领 1/2 必胜;首领 3 硬门槛 68 未达 ⇒ 必团灭
+const FULL_CLEAR_ITEM_LEVEL = 85; // (85+27)×1.19 ≈ 133 ≥ 86+5:末首领必胜 ⇒ 全通确定
+const TWO_KILL_ITEM_LEVEL = 34; // 首领 1/2 必胜;首领 3 硬门槛 36 未达 ⇒ 必团灭
 
 /** 合成团员:只填团本结算涉及的维度(与 raid.test 同法)。 */
 function synthMember(id: number, classId: string, specId: string, itemLevel: number): Member {
@@ -205,8 +205,10 @@ describe('橡皮筋:快推进曲线(验收标准 2 与 5)', () => {
     expect(rivals.every((guild) => guild.ladderProgress === WORLD.rubberBand.weeklyAdvance)).toBe(true);
     expect(rivals.every((guild) => guild.ladderProgress <= RAID.bosses.length - WORLD.rubberBand.lagBosses)).toBe(true);
 
-    // 继续数周(全通后重复伐木,无新首杀可拿):竞争公会被锚拉住,停在玩家身后
+    // 继续数周(全通后转备战下一档:装等逐周抬升,成长仍在 ⇒ 未停滞,
+    // 竞争公会被锚拉住,停在玩家身后一个身位)
     for (let week = 0; week < 3; week++) {
+      state = reequipAll(state, FULL_CLEAR_ITEM_LEVEL + 3 * (week + 1));
       state = drive(state, { command: { type: 'openRaid', raidId: RAID.id }, deltaGameMinutes: 0 }).state;
       state = drive(state, { deltaGameMinutes: GAME_MINUTES_PER_WEEK }).state;
     }
@@ -235,12 +237,14 @@ describe('橡皮筋:长期停滞曲线(验收标准 3 与 5)', () => {
     state = output.state;
     events.push(...output.events);
     expect(state.honorWall.firstKills).toHaveLength(2); // 首领 1、2 已入墙
-    // 之后每周再开团(装等不足,夜夜团灭在硬门槛)—— 三刻度全无增长的真停滞
+    // 之后每周再开团(装等不足,夜夜团灭在硬门槛)—— 三刻度全无增长的真停滞;
+    // T18 起团本掉落更肥,前排两名的战利品会把团队装等抬过硬门槛、把「停滞」
+    // 变回推进 —— 每周夜后把装备重置回 67,保住「原地开荒」的夹具语义
     for (let week = 0; week < 3; week++) {
       output = drive(state, { command: { type: 'openRaid', raidId: RAID.id }, deltaGameMinutes: 0 });
       state = output.state;
       output = drive(state, { deltaGameMinutes: GAME_MINUTES_PER_WEEK });
-      state = output.state;
+      state = reequipAll(output.state, TWO_KILL_ITEM_LEVEL);
       events.push(...output.events);
     }
     return { state, events };
@@ -276,8 +280,11 @@ describe('橡皮筋:长期停滞曲线(验收标准 3 与 5)', () => {
 
     expect(state.lastRaidNight?.cleared).toBe(true); // 内容没有被锁:全通
     expect(state.honorWall.firstKills).toHaveLength(RAID.bosses.length); // 本会首杀补齐(含被夺服务器首杀的首领)
-    expect(state.world.serverFirstKills).toHaveLength(serverKillsBefore); // 服务器首杀归属不变(不夺回、不新增)
-    expect(state.world.serverFirstKills.filter((kill) => kill.byPlayer)).toHaveLength(2);
+    // 已被夺走的服务器首杀不夺回;恢复期新增的首杀全归玩家(未被超车的首领照常首杀)
+    expect(state.world.serverFirstKills.slice(0, serverKillsBefore)).toEqual(
+      state.world.serverFirstKills.slice(0, serverKillsBefore),
+    );
+    expect(state.world.serverFirstKills.slice(serverKillsBefore).every((kill) => kill.byPlayer)).toBe(true);
     // 掉落照常发生(超车不影响 loot)
     expect(state.lastRaidNight!.bosses.reduce((sum, boss) => sum + boss.drops.length, 0)).toBe(
       RAID.bosses.reduce((sum, boss) => sum + boss.dropsPerKill, 0),
@@ -294,9 +301,10 @@ describe('橡皮筋:长期停滞曲线(验收标准 3 与 5)', () => {
     state = drive(state, { command: { type: 'openRaid', raidId: RAID.id }, deltaGameMinutes: 0 }).state;
     state = drive(state, { deltaGameMinutes: GAME_MINUTES_PER_WEEK }).state; // 恢复推进的一周
 
-    // 玩家进度回到 5,竞争公会冻结在超车时的位置(锚拉紧:目标 4 < 现位,只增不减也不退)
+    // 玩家进度回到 5,竞争公会被锚拉住:至多跟到玩家身后一名(目标 4),不再超车
     const rivalsAfter = state.world.guilds.filter((guild) => guild.kind === 'rival');
-    expect(rivalsAfter.map((guild) => guild.ladderProgress)).toEqual(rivalProgressAtOvertake);
+    expect(rivalsAfter.every((guild) => guild.ladderProgress <= RAID.bosses.length - WORLD.rubberBand.lagBosses)).toBe(true);
+    expect(rivalsAfter.every((guild) => guild.ladderProgress >= rivalProgressAtOvertake[0]!)).toBe(true);
     // 排名反超:玩家满进度分压过一切 NPC
     const ranking = serverRanking(state);
     expect(ranking.playerRank).toBe(1);

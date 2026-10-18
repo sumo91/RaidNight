@@ -312,7 +312,7 @@ describe('编成微调指令:阵形入安排(验收标准 1)', () => {
 // ———— 验收标准 3 与 4:同一编成,不同决策组合 ⇒ 当夜结算结果差异 ————
 
 /** 装等 68(硬门槛 68 达标):第 4/5 首领处悬念区间 —— 决策的边际胜负带。 */
-const MARGINAL_ILVL = 68;
+const MARGINAL_ILVL = 36;
 
 describe('消耗品预算:增益计入当夜结算(验收标准 3 与 4)', () => {
   it('无决策基线:第 4/5 首领的胜率 = 独立重算(悬念区间)', () => {
@@ -616,9 +616,9 @@ describe('决策夜的制度与代价面不受污染(回归护栏)', () => {
   });
 
   it('未达硬门槛的编成:决策增益救不了装等门槛(硬门槛语义不被决策绕过)', () => {
-    // 装等 67(硬门槛 68 未达)+ 全力开荒 +14%:战力足够,仍必败于硬门槛首领
+    // 装等 34(硬门槛 36 未达)+ 全力开荒 +14%:战力足够,仍必败于硬门槛首领
     const { state } = runNight(
-      raidTeamState(67, { tactics: { consumableTier: 'lavish' } }),
+      raidTeamState(34, { tactics: { consumableTier: 'lavish' } }),
     );
     const report = state.lastRaidNight!;
     const gateIndex = RAID.bosses.findIndex((boss) => boss.hardGateItemLevel !== undefined)!;

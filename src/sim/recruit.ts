@@ -1,3 +1,4 @@
+import { CLASS_BY_ID, type Role } from '../content/classes';
 import { RECRUIT } from '../content/recruit';
 import { RENOWN_RUNG_COUNT } from '../content/reputation';
 import { SKILL_TIERS, type SkillTierDef } from '../content/skill-tiers';
@@ -86,6 +87,28 @@ export function generateApplicantPool(
     applicants.push({ applicationId: startApplicationId + i, profile });
     usedNames.add(profile.name);
   }
+
+  // 职能保底(T18,配置在 content/recruit):池中无坦克/治疗职能时,把首份
+  // 申请改写为保底职业与专精(纯改写、不消费随机链 —— 同种子同池不变语义下
+  // 只是把「长期抽不到坦奶」的死局收掉;等级/装备/三维等画像保持原样)
+  const hasRole = (role: Role) =>
+    applicants.some((applicant) => {
+      const spec = CLASS_BY_ID.get(applicant.profile.classId)?.specs.find(
+        (entry) => entry.id === applicant.profile.specId,
+      );
+      return spec?.role === role;
+    });
+  const guarantee = (role: Role, fallback: { classId: string; specId: string }) => {
+    if (!hasRole(role) && applicants.length > 0) {
+      const first = applicants[0]!;
+      applicants[0] = {
+        ...first,
+        profile: { ...first.profile, classId: fallback.classId, specId: fallback.specId },
+      };
+    }
+  };
+  guarantee('坦克', RECRUIT.poolRoleGuarantee.tank);
+  guarantee('治疗', RECRUIT.poolRoleGuarantee.healer);
 
   return { applicants, rngState: rng, nextApplicationId: startApplicationId + applicants.length };
 }

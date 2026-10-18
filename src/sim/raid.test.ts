@@ -150,13 +150,13 @@ describe('团本内容表:数据驱动(硬门槛首领存在,验收标准 3 的�
     const gated = RAID.bosses.filter((boss) => boss.hardGateItemLevel !== undefined);
     expect(gated.length).toBeGreaterThanOrEqual(1);
     for (const boss of gated) {
-      expect(boss.hardGateItemLevel!).toBeGreaterThan(RAID.unlock.averageItemLevel);
+      expect(boss.hardGateItemLevel!).toBeGreaterThan(RAID.unlock.averageItemLevel);  // 硬门槛高于解锁装等刻度
     }
   });
 });
 
 describe('开团指令:门槛裁决(验收标准 1)', () => {
-  /** 命令可用状态:团队检查通过且内容门槛达标(装等 67 ≥ 62)。 */
+  /** 命令可用状态:团队检查通过且内容门槛达标(装等 67 ≥ 40)。 */
   function commandReadyState(): GameState {
     return raidTeamState(67, { plan: false });
   }
@@ -191,7 +191,7 @@ describe('开团指令:门槛裁决(验收标准 1)', () => {
   });
 
   it('内容阶梯未解锁(装等未达):不可开团;未知团本 id:忽略', () => {
-    const lowGear = raidTeamState(60, { plan: false }); // 团本门槛装等 62
+    const lowGear = raidTeamState(20, { plan: false }); // 团本门槛装等 25
     const blocked = step(lowGear, { command: { type: 'openRaid', raidId: RAID.id }, deltaGameMinutes: 0 });
     expect(blocked.events).toEqual([]);
     expect(blocked.state.raidPlan).toBeUndefined();
@@ -219,9 +219,9 @@ describe('开团指令:门槛裁决(验收标准 1)', () => {
 });
 
 describe('团本夜:整夜结算的确定性与首领顺序(验收标准 1 与 6)', () => {
-  /** 跨过周边界,触发一次团本夜(装等 80 ⇒ 各首领全处必胜区间)。 */
+  /** 跨过周边界,触发一次团本夜(装等 55 ⇒ (55+27)×1.19 ≈ 98 ≥ 86+5:全通且掉落可穿戴)。 */
   function runNight(seed: number): { state: GameState; raidEvents: string[] } {
-    const facade = new SimulationFacade(seed, undefined, raidTeamState(80, { seed }));
+    const facade = new SimulationFacade(seed, undefined, raidTeamState(55, { seed }));
     const output = facade.dispatch({ deltaGameMinutes: 60 });
     return {
       state: facade.state,
@@ -237,9 +237,9 @@ describe('团本夜:整夜结算的确定性与首领顺序(验收标准 1 与 6
   });
 
   it('一次跨边界与分段推进等价:团本夜在周边界整夜结算,切分不改变结果', () => {
-    const oneShot = new SimulationFacade(SEED, undefined, raidTeamState(80));
+    const oneShot = new SimulationFacade(SEED, undefined, raidTeamState(55));
     const oneShotEvents = oneShot.dispatch({ deltaGameMinutes: 60 }).events;
-    const chunked = new SimulationFacade(SEED, undefined, raidTeamState(80));
+    const chunked = new SimulationFacade(SEED, undefined, raidTeamState(55));
     const chunkedEvents = [
       ...chunked.dispatch({ deltaGameMinutes: 20 }).events,
       ...chunked.dispatch({ deltaGameMinutes: 20 }).events,
@@ -250,7 +250,7 @@ describe('团本夜:整夜结算的确定性与首领顺序(验收标准 1 与 6
   });
 
   it('按首领顺序逐个结算:日志顺序 = 内容表首领顺序,周更在团本夜之后', () => {
-    const facade = new SimulationFacade(SEED, undefined, raidTeamState(80));
+    const facade = new SimulationFacade(SEED, undefined, raidTeamState(55));
     const output = facade.dispatch({ deltaGameMinutes: 60 });
     const texts = output.events.filter((e) => e.kind === '团本').map((e) => e.text);
     expect(texts[0]).toContain(`团本夜开始:「${RAID.name}」`);
@@ -277,7 +277,7 @@ describe('团本夜:整夜结算的确定性与首领顺序(验收标准 1 与 6
     expect(report.lineup).toHaveLength(40); // 40 人点阵的数据面
     expect(report.lineup.filter((m) => m.role === '坦克')).toHaveLength(8);
     expect(report.lineup.filter((m) => m.role === '治疗')).toHaveLength(8);
-    expect(report.teamItemLevel).toBe(80);
+    expect(report.teamItemLevel).toBe(55);
     expect(report.bosses.map((b) => b.killed)).toEqual(RAID.bosses.map(() => true));
     expect(state.vault).toEqual({ gold: VAULT.startingGold, repairSpent: 0, incomeTotal: 0 }); // 全通无修理支出;默认裁量制金币不流动
     // 全员:每次首领战积劳 8 × 5 次;士气 +clearMoodBoost;会长角色不受影响
@@ -311,12 +311,12 @@ describe('团本夜:整夜结算的确定性与首领顺序(验收标准 1 与 6
     // 装等总量独立重算:基础 40 人 × 8 部位 × 80 + 全部换装提升之和
     const gearSum = (members: readonly Member[]) =>
       members.reduce((sum, m) => sum + m.gear.reduce((s, item) => s + item.itemLevel, 0), 0);
-    const before = 40 * 8 * 80;
+    const before = 40 * 8 * 55;
     const delta = equipped.reduce((sum, d) => sum + d.upgradeDelta!, 0);
     expect(gearSum(state.members.filter((m) => m.id <= 40))).toBe(before + delta);
     // 换上装备的团员装备总量确实高于起始(逐件装等和,不受展示取整影响)
     const upgraded = state.members.filter(
-      (m) => m.id <= 40 && m.gear.reduce((s, item) => s + item.itemLevel, 0) > 8 * 80,
+      (m) => m.id <= 40 && m.gear.reduce((s, item) => s + item.itemLevel, 0) > 8 * 55,
     );
     expect(upgraded.length).toBeGreaterThan(0);
     expect(new Set(equipped.map((d) => d.assignedTo)).size).toBe(upgraded.length); // 去向人数一致
@@ -324,9 +324,9 @@ describe('团本夜:整夜结算的确定性与首领顺序(验收标准 1 与 6
 });
 
 describe('硬门槛首领:装等不达标必败,无论战力(验收标准 3)', () => {
-  /** 装等 67:战力对第 3 首领本有胜算,但硬门槛 68 未达 ⇒ 必败团灭。 */
+  /** 装等 34:战力对第 3 首领本有胜算,但硬门槛 36 未达 ⇒ 必败团灭。 */
   function wipeNight(): { state: GameState; raidEvents: string[] } {
-    const facade = new SimulationFacade(SEED, undefined, raidTeamState(67));
+    const facade = new SimulationFacade(SEED, undefined, raidTeamState(34));
     const output = facade.dispatch({ deltaGameMinutes: 60 });
     return {
       state: facade.state,
@@ -350,7 +350,7 @@ describe('硬门槛首领:装等不达标必败,无论战力(验收标准 3)', (
     expect(gate.successChance).toBe(0);
     expect(gate.band).toBe('必败');
     // 战力本有胜算(未入「必败」区间):胜率归零只能来自硬门槛
-    expect(gate.power).toBeCloseTo(expectedPower(67), 5);
+    expect(gate.power).toBeCloseTo(expectedPower(34), 5);
     expect(gate.power).toBeGreaterThan(gate.target - DUNGEON_SETTLEMENT.failMargin);
     expect(gate.drops).toEqual([]); // 团灭无掉落
     expect(gate.fallen).toBe(40); // 团灭 = 全员倒下(点阵数据)
@@ -368,8 +368,8 @@ describe('硬门槛首领:装等不达标必败,无论战力(验收标准 3)', (
   });
 
   it('装等达标后硬门槛放行:同一首领被击杀(开荒推进)', () => {
-    // 装等 72:第 3、4 首领必胜区间(战力 117.8 ≥ 目标+5),硬门槛 68 已达
-    const facade = new SimulationFacade(SEED, undefined, raidTeamState(72));
+    // 装等 42:第 3、4 首领必胜区间(战力 (42+27)×1.19 ≈ 82 ≥ 75),硬门槛 36 已达
+    const facade = new SimulationFacade(SEED, undefined, raidTeamState(42));
     facade.dispatch({ deltaGameMinutes: 60 });
     const report = facade.state.lastRaidNight!;
     const gateBossIndex = RAID.bosses.findIndex((b) => b.hardGateItemLevel !== undefined)!;
@@ -380,7 +380,7 @@ describe('硬门槛首领:装等不达标必败,无论战力(验收标准 3)', (
 
 describe('团灭代价与最小金库(验收标准 4 与 5)', () => {
   it('团灭付出修理金/疲劳/士气,数值精确等于内容表配置', () => {
-    const facade = new SimulationFacade(SEED, undefined, raidTeamState(67));
+    const facade = new SimulationFacade(SEED, undefined, raidTeamState(34));
     facade.dispatch({ deltaGameMinutes: 60 });
     const state = facade.state;
     const attempts = 3; // 击杀 2 名首领 + 第 3 名团灭那次尝试
@@ -403,7 +403,7 @@ describe('团灭代价与最小金库(验收标准 4 与 5)', () => {
   });
 
   it('无永久损失:名册不动、忠诚只按制度微调、装备只增不减', () => {
-    const before = raidTeamState(67);
+    const before = raidTeamState(34);
     const facade = new SimulationFacade(SEED, undefined, structuredClone(before));
     facade.dispatch({ deltaGameMinutes: 60 });
     const after = facade.state;
@@ -420,20 +420,20 @@ describe('团灭代价与最小金库(验收标准 4 与 5)', () => {
     for (const member of after.members) {
       expect(member.gear).toHaveLength(8); // 8 部位一件不少
       for (const item of member.gear) {
-        expect(item.itemLevel).toBeGreaterThanOrEqual(67); // 装备只被更好的替换,从不丢失
+        expect(item.itemLevel).toBeGreaterThanOrEqual(34); // 装备只被更好的替换,从不丢失
       }
     }
   });
 
   it('金库余额不足:修理金按余额封顶实付(不清零为负)', () => {
-    const facade = new SimulationFacade(SEED, undefined, raidTeamState(67, { vaultGold: 50 }));
+    const facade = new SimulationFacade(SEED, undefined, raidTeamState(34, { vaultGold: 50 }));
     facade.dispatch({ deltaGameMinutes: 60 });
     expect(facade.state.vault).toEqual({ gold: 0, repairSpent: 50, incomeTotal: 0 });
     expect(facade.state.lastRaidNight!.wipe!.repairGold).toBe(50); // 报告记实付
   });
 
   it('金库见底:团灭照样发生,实付 0(代价面保留疲劳与士气)', () => {
-    const facade = new SimulationFacade(SEED, undefined, raidTeamState(67, { vaultGold: 0 }));
+    const facade = new SimulationFacade(SEED, undefined, raidTeamState(34, { vaultGold: 0 }));
     facade.dispatch({ deltaGameMinutes: 60 });
     expect(facade.state.vault).toEqual({ gold: 0, repairSpent: 0, incomeTotal: 0 });
     expect(facade.state.lastRaidNight!.cleared).toBe(false);
@@ -443,7 +443,7 @@ describe('团灭代价与最小金库(验收标准 4 与 5)', () => {
 
 describe('团本 CD 与夜取消(验收标准 1 与 6)', () => {
   it('开团指令与时间增量同一步输入:指令先生效,当步跨边界即整夜结算', () => {
-    const facade = new SimulationFacade(SEED, undefined, raidTeamState(80, { plan: false }));
+    const facade = new SimulationFacade(SEED, undefined, raidTeamState(55, { plan: false }));
     const output = facade.dispatch({
       command: { type: 'openRaid', raidId: RAID.id },
       deltaGameMinutes: 60,
@@ -454,7 +454,7 @@ describe('团本 CD 与夜取消(验收标准 1 与 6)', () => {
   });
 
   it('团本 CD = 游戏周:夜结束后,未重新开团则下一周边界无团本事件', () => {
-    const facade = new SimulationFacade(SEED, undefined, raidTeamState(80));
+    const facade = new SimulationFacade(SEED, undefined, raidTeamState(55));
     facade.dispatch({ deltaGameMinutes: 60 }); // 第 1 夜(全通)
     const nextWeek = facade.dispatch({ deltaGameMinutes: GAME_MINUTES_PER_WEEK });
     expect(nextWeek.events.filter((e) => e.kind === '团本')).toEqual([]);
@@ -466,7 +466,7 @@ describe('团本 CD 与夜取消(验收标准 1 与 6)', () => {
   });
 
   it('开团后阵容散架:夜取消(不算团灭、不付代价、不消费额外随机)', () => {
-    const broken = raidTeamState(80);
+    const broken = raidTeamState(55);
     const squads = broken.squads.map((squad, i) =>
       i === 7 ? { ...squad, memberIds: squad.memberIds.slice(0, 4) } : squad,
     );
@@ -483,12 +483,12 @@ describe('团本 CD 与夜取消(验收标准 1 与 6)', () => {
   });
 
   it('开团后名册回落到门槛之下:夜取消并说明未达标项', () => {
-    // 直接构造:装等 60 < 团本门槛 62 的已开团状态(夜结算时的门槛复核)
-    const facade = new SimulationFacade(SEED, undefined, raidTeamState(60));
+    // 直接构造:装等 20 < 团本门槛 25 的已开团状态(夜结算时的门槛复核)
+    const facade = new SimulationFacade(SEED, undefined, raidTeamState(20));
     const output = facade.dispatch({ deltaGameMinutes: 60 });
     const texts = output.events.filter((e) => e.kind === '团本').map((e) => e.text);
     expect(texts[0]).toContain(`团本夜取消:「${RAID.name}」门槛未达`);
-    expect(texts[0]).toContain('公会平均装等 62');
+    expect(texts[0]).toContain('公会平均装等 25');
     expect(facade.state.lastRaidNight).toBeUndefined();
     expect(facade.state.vault.gold).toBe(VAULT.startingGold);
   });
@@ -496,7 +496,7 @@ describe('团本 CD 与夜取消(验收标准 1 与 6)', () => {
 
 describe('存档兼容:最小金库随 v6 落盘(验收标准 5 的持久面)', () => {
   it('金库与开团安排随状态序列化;round-trip 后团本夜继续可结算', () => {
-    const state = raidTeamState(80);
+    const state = raidTeamState(55);
     const restored = decodeSave(encodeSave(state))!;
     expect(restored).toEqual(state);
     expect(restored.vault).toEqual({ gold: VAULT.startingGold, repairSpent: 0, incomeTotal: 0 });
@@ -506,7 +506,7 @@ describe('存档兼容:最小金库随 v6 落盘(验收标准 5 的持久面)', 
   });
 
   it('v5 旧档(无金库)迁移后补建会起始余额,可直接继续玩', () => {
-    const state = raidTeamState(80);
+    const state = raidTeamState(55);
     // 剥掉金库,还原 v5 时代的真实存档形状
     const legacyState = JSON.parse(
       JSON.stringify(state, (key, value) => (key === 'vault' ? undefined : value)),

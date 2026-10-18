@@ -115,9 +115,9 @@ describe('声望阶位:7 档 × 3 星(纯函数,数据面)', () => {
     expect(renownRung(-100)).toBe(0);
     expect(renownRung(rungThreshold(MAX_RUNG))).toBe(MAX_RUNG);
     expect(renownRung(10_000)).toBe(MAX_RUNG);
-    // 名册上限联动:起步 6 人小会,满阶 40 人(团队 = 8 小队 × 5)
+    // 名册上限联动:起步 6 人小会,满阶 50 人(40 人团队 + 替补席余量)
     expect(rosterCapForRung(0)).toBe(RECRUIT.baseRosterCap);
-    expect(rosterCapForRung(MAX_RUNG)).toBe(40);
+    expect(rosterCapForRung(MAX_RUNG)).toBe(50);
   });
 });
 
@@ -177,12 +177,12 @@ describe('团本夜 → 声望与荣誉墙:首杀/里程碑/稀有驱动(验收�
     ).toBe(true);
   });
 
-  it('档位与星级可见 + 名册上限联动:一夜全通直抵满阶,上限 6 → 40', () => {
+  it('档位与星级可见 + 名册上限联动:一夜全通直抵满阶,上限 6 → 50', () => {
     const { facade } = runLegendaryNight();
     const state = facade.state;
     expect(renownRung(state.renownPoints)).toBe(MAX_RUNG); // 满阶 = 第 7 档 3 星
-    expect(state.rosterCap).toBe(rosterCapForRung(MAX_RUNG)); // 40(声望档位联动)
-    expect(state.rosterCap).toBe(40);
+    expect(state.rosterCap).toBe(rosterCapForRung(MAX_RUNG)); // 50(声望档位联动)
+    expect(state.rosterCap).toBe(50);
   });
 
   it('稀有陈列:报告中穿上的紫装逐件入墙,持有人/来源/日期可追溯', () => {
@@ -192,16 +192,22 @@ describe('团本夜 → 声望与荣誉墙:首杀/里程碑/稀有驱动(验收�
       .lastRaidNight!.bosses.flatMap((boss) => boss.drops)
       .filter((drop) => drop.quality === '紫' && drop.equipped);
     expect(state.honorWall.rareDrops).toHaveLength(equippedPurples.length);
-    for (const record of state.honorWall.rareDrops) {
+    // 入墙顺序 = 报告顺序(逐件对位;同夜多件同部位紫装也各归各的持有人)
+    state.honorWall.rareDrops.forEach((record, index) => {
+      const drop = equippedPurples[index]!;
       expect(record.quality).toBe('紫');
-      expect(record.holder).toBe(equippedPurples.find((drop) => drop.slot === record.slot)?.assignedTo);
+      expect(record.slot).toBe(drop.slot);
+      expect(record.holder).toBe(drop.assignedTo);
       expect(record.source).toBe(RAID.name);
       expect(record.atGameMinutes).toBe(GAME_MINUTES_PER_WEEK);
+    });
+    // 功绩联动:团员的 rareLootWon 计数 = 当夜穿上的紫装件数(换装唯一入口计数)
+    const purpleCountByName = new Map<string, number>();
+    for (const drop of equippedPurples) {
+      purpleCountByName.set(drop.assignedTo!, (purpleCountByName.get(drop.assignedTo!) ?? 0) + 1);
     }
-    // 功绩联动:穿上紫装的团员 rareLootWon 计数与墙上一致(换装唯一入口计数)
-    const purpleHolders = new Set(equippedPurples.map((drop) => drop.assignedTo));
     for (const member of state.members) {
-      expect(member.rareLootWon).toBe(purpleHolders.has(member.name) ? 1 : 0);
+      expect(member.rareLootWon).toBe(purpleCountByName.get(member.name) ?? 0);
     }
   });
 

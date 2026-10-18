@@ -27,13 +27,18 @@ export interface ReputationTierDef {
   readonly poachUnlocked: boolean;
 }
 
-/** 声望档位表:7 档,阶位(rung)= 档序 × 3 + 星,共 21 级。 */
+/**
+ * 声望档位表:7 档,阶位(rung)= 档序 × 3 + 星,共 21 级。
+ * 档位分值与名册上限按「一轮 6–8 游戏周」粗调(T18):名册上限的成长
+ * 要跟得上内容阶梯 —— 20 人休闲团本(21 人)在第 3 档放开,40 人主力
+ * 团本(40 人编满 + 冷板凳余量)在第 6 档放开,传奇档留出替补席余量。
+ */
 export const RENOWN_TIERS: readonly ReputationTierDef[] = [
   {
     id: 'unknown',
     name: '无名小会',
     blurb: '刚挂出会徽,还没人知道门朝哪边开。',
-    starPoints: [4, 8, 12],
+    starPoints: [4, 7, 10],
     rosterCapBonus: 0,
     poachUnlocked: false,
   },
@@ -41,7 +46,7 @@ export const RENOWN_TIERS: readonly ReputationTierDef[] = [
     id: 'rising',
     name: '初露头角',
     blurb: '练级路上开始有人打听这个会。',
-    starPoints: [8, 10, 12],
+    starPoints: [6, 8, 10],
     rosterCapBonus: 4,
     poachUnlocked: false,
   },
@@ -49,40 +54,40 @@ export const RENOWN_TIERS: readonly ReputationTierDef[] = [
     id: 'known',
     name: '闻名一方',
     blurb: '主城招募频道里有了你们的名字。',
-    starPoints: [12, 14, 16],
-    rosterCapBonus: 8,
+    starPoints: [10, 12, 14],
+    rosterCapBonus: 10,
     poachUnlocked: true,
   },
   {
     id: 'contender',
     name: '服务器劲旅',
     blurb: '全服开始正视你们的进度。',
-    starPoints: [16, 18, 20],
-    rosterCapBonus: 12,
+    starPoints: [14, 16, 18],
+    rosterCapBonus: 16,
     poachUnlocked: true,
   },
   {
     id: 'rival',
     name: '争锋公会',
     blurb: '首杀榜上,你们和别人掰起了手腕。',
-    starPoints: [20, 22, 24],
-    rosterCapBonus: 16,
+    starPoints: [17, 19, 21],
+    rosterCapBonus: 24,
     poachUnlocked: true,
   },
   {
     id: 'renowned',
     name: '名门公会',
     blurb: '新人挤破头想递申请。',
-    starPoints: [24, 26, 28],
-    rosterCapBonus: 22,
+    starPoints: [20, 22, 24],
+    rosterCapBonus: 34,
     poachUnlocked: true,
   },
   {
     id: 'legend',
     name: '服务器传奇',
     blurb: '后来者会讲起这个会的传说。',
-    starPoints: [28, 30, 32],
-    rosterCapBonus: 34,
+    starPoints: [23, 25, 27],
+    rosterCapBonus: 44,
     poachUnlocked: true,
   },
 ];
@@ -122,15 +127,15 @@ export interface MilestoneDef {
 
 /** 里程碑表(荣誉墙按达成时刻陈列;同一里程碑只达成一次)。 */
 export const MILESTONES: readonly MilestoneDef[] = [
-  { id: 'avg-level-20', name: '初具规模', description: '公会平均等级达到 20 级', kind: 'avgLevel', threshold: 20, points: 5 },
+  { id: 'avg-level-20', name: '初具规模', description: '公会平均等级达到 20 级', kind: 'avgLevel', threshold: 20, points: 8 },
   { id: 'avg-level-40', name: '练级路上', description: '公会平均等级达到 40 级', kind: 'avgLevel', threshold: 40, points: 8 },
   { id: 'avg-level-55', name: '满编远征', description: '公会平均等级达到 55 级', kind: 'avgLevel', threshold: 55, points: 12 },
-  { id: 'roster-10', name: '十人之会', description: '在册团员达到 10 人', kind: 'rosterSize', threshold: 10, points: 6 },
+  { id: 'roster-10', name: '十人之会', description: '在册团员达到 10 人', kind: 'rosterSize', threshold: 10, points: 8 },
   { id: 'roster-20', name: '二十人之会', description: '在册团员达到 20 人', kind: 'rosterSize', threshold: 20, points: 10 },
   { id: 'roster-30', name: '三十人之会', description: '在册团员达到 30 人', kind: 'rosterSize', threshold: 30, points: 12 },
   { id: 'roster-40', name: '四十人满编', description: '在册团员达到 40 人(整编团队)', kind: 'rosterSize', threshold: 40, points: 15 },
   { id: 'first-max-level', name: '第一位满级', description: '名册中出现第一位满级团员', kind: 'maxLevelMember', points: 10 },
-  { id: 'first-dungeon-clear', name: '开荒开门红', description: '首次打通一座 5 人本', kind: 'firstDungeonClear', points: 6 },
+  { id: 'first-dungeon-clear', name: '开荒开门红', description: '首次打通一座 5 人本', kind: 'firstDungeonClear', points: 10 },
   { id: 'first-raid-clear', name: '首通团本', description: '首个团本夜全通', kind: 'firstRaidClear', points: 30 },
   { id: 'first-purple', name: '首件紫装', description: '第一件紫装穿上了团员的身', kind: 'firstPurpleEquipped', points: 6 },
   { id: 'vault-income-1000', name: '金库盈千', description: '公会金库历史收入累计达 1000 金', kind: 'vaultIncome', threshold: 1000, points: 8 },

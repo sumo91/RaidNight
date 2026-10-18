@@ -4,6 +4,7 @@
  * 用法:npm run gen:art(vite-node 运行,零额外依赖)。
  * 产出(docs/art/samples/):
  *   · classes.png —— 9 职业识别性样张(3×3,评审与精修基准)
+ *   · bosses.png  —— 6 团本旗舰首领形象样张(3×2,T18 首领精修)
  *   · icons.png  —— 图标总览(职能 / 徽记 / 品质宝石)
  *   · MANIFEST.json —— 每个资产的 sha256 与字节数,供复现校验
  * 管线是纯函数:任何时候重跑,字节应与 MANIFEST 一致(除非内容稿改了)。
@@ -15,6 +16,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { renderSheet, renderSprite } from '../src/art/pipeline';
 import { ICONS } from '../src/content/icons';
+import { BOSS_PORTRAITS } from '../src/content/boss-portraits';
 import { PORTRAITS } from '../src/content/portraits';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -46,7 +48,17 @@ writeAsset('classes.png', renderSheet(PORTRAITS, { columns: 3, cellPadding: 2, s
 // 图标总览:职能 3 + 徽记 2 + 宝石 4,一行 9 格、放大 8 倍
 writeAsset('icons.png', renderSheet(ICONS, { columns: 9, cellPadding: 2, scale: 8 }), manifest);
 
+// 团本首领形象样张(T18 精修资产):6 名旗舰首领,3×2、放大 6 倍
+writeAsset(
+  'bosses.png',
+  renderSheet(BOSS_PORTRAITS, { columns: 3, cellPadding: 2, scale: 6 }),
+  manifest,
+);
+
 // 逐资产原图(UI 实际使用的尺寸,便于逐张审)
+for (const boss of BOSS_PORTRAITS) {
+  writeAsset(`${boss.key}.png`, renderSprite(boss), manifest);
+}
 for (const portrait of PORTRAITS) {
   writeAsset(`${portrait.classId}.png`, renderSprite(portrait), manifest);
 }

@@ -16,7 +16,7 @@ import {
   WEEKLY_GOAL_BY_ID,
   type WeeklyGoalId,
 } from '../content/plan';
-import { RAID_BY_ID, RAID_SETTLEMENT } from '../content/raids';
+import { RAID_BY_ID, RAIDS, RAID_SETTLEMENT } from '../content/raids';
 import {
   CONSUMABLE_TIERS,
   RAID_STANCES,
@@ -33,7 +33,7 @@ import { RIVAL_GUILD_BY_NAME, WORLD } from '../content/world';
 import { GAME_MINUTES_PER_DAY, GAME_MINUTES_PER_WEEK, gameMinutesToRealMs } from '../sim/clock';
 import type { SimInput } from '../sim/facade';
 import type { SimEvent } from '../sim/events';
-import { squadCompositions, teamCheck, unassignedMembers } from '../sim/comp';
+import { squadCompositions, teamCheck, teamCheckOf, unassignedMembers } from '../sim/comp';
 import { dungeonStatuses, squadDungeon, squadDungeonReadiness } from '../sim/dungeon';
 import { externalActivityStatuses, squadExternalActivity } from '../sim/economy';
 import { levelingMapStatuses, squadLevelingMap, xpToNextLevel } from '../sim/leveling';
@@ -54,7 +54,7 @@ import {
   nextHonorRank,
   squadBattlefield,
 } from '../sim/pvp';
-import { averageItemLevel, guildAverageItemLevel, guildAverageLevel } from '../sim/roster';
+import { activeSet, averageItemLevel, guildAverageItemLevel, guildAverageLevel, setBonusItemLevel, setPieceCounts } from '../sim/roster';
 import { activityQueue, nextRaidNight, nextSettlement } from '../sim/schedule';
 import { serverLadder, serverRanking } from '../sim/world';
 import type {
@@ -65,7 +65,7 @@ import type {
   RaidBossOutcome,
   RaidNightReport,
 } from '../sim/state';
-import { iconDataUrl, pixelImg, portraitDataUrl } from './artwork';
+import { bossPortraitDataUrl, iconDataUrl, pixelImg, portraitDataUrl } from './artwork';
 import { formatGameClock, formatGameDuration, formatGameStamp, formatRealDuration } from './format';
 
 /**
@@ -799,6 +799,10 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
   raidOpenEl.addEventListener('click', (event) => {
     const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-action]');
     if (button === null || button.disabled) {
+      return;
+    }
+    if (button.dataset.action === 'open-raid-grun' && button.dataset.raidId !== undefined) {
+      options.dispatch({ command: { type: 'openRaid', raidId: button.dataset.raidId, gRun: true }, deltaGameMinutes: 0 });
       return;
     }
     if (button.dataset.action === 'open-raid' && button.dataset.raidId !== undefined) {
@@ -1649,7 +1653,6 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
 
   /** 团本开团面板(编成页):门槛/团队检查状态 + 开团与取消(裁决一律在 sim)。 */
   function renderRaidOpen(state: GameState): void {
-    const check = teamCheck(state);
     const statuses = raidStatuses(state.members);
     const plan = state.raidPlan;
 
@@ -1675,7 +1678,9 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
           'p',
           'raid-plan-line',
           raid !== undefined
-            ? `已开团:「${raid.name}」—— 团本夜在下一个周边界打响,按首领顺序结算,赛中只观赛。`
+            ? plan.mode === 'gRun'
+              ? `已开团(G团接单):「${raid.name}」—— 团本夜掉落整批卖给买家,金库抽成、打工者均分。`
+              : `已开团:「${raid.name}」—— 团本夜在下一个周边界打响,按首领顺序结算,赛中只观赛。`
             : '已开团:安排的团本已不在内容表,团本夜将自动撤销。',
         ),
       );
@@ -1696,19 +1701,46 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
 
     const list = el('ul', 'raid-list');
     for (const { def, unlocked, unmet } of statuses) {
+      // 团队检查按团本规模折算(40 人 = 8 支满员小队;20 人休闲本 = 4 支)
+      const sizeCheck = teamCheckOf(state.members, state.squads, def.size);
       const card = el('li', `raid-card${unlocked ? '' : ' map-locked'}`);
       const cardHead = el('div', 'map-head');
-      cardHead.append(el('span', 'map-name', def.name));
-      cardHead.append(el('span', 'map-tier map-tier-dungeon', `第 ${def.tier} 档`));
+      // 首领形象(T18 精修资产:同团本共用旗舰首领形象)
       cardHead.append(
+        pixelImg(bossPortraitDataUrl(def.id), `${def.name}首领形象`, 'pixel-art raid-boss-portrait'),
+      );
+      const headText = el('div', 'map-head-text');
+      const nameRow = el('div', 'map-head-row');
+      nameRow.append(el('span', 'map-name', def.name));
+      nameRow.append(
+        el(
+          'span',
+          `map-tier map-tier-dungeon${def.casual === true ? ' map-tier-casual' : ''}`,
+          def.casual === true ? `第 ${def.tier} 档 · ${def.size} 人休闲` : `第 ${def.tier} 档 · ${def.size} 人主力`,
+        ),
+      );
+      headText.append(nameRow);
+      headText.append(
         el(
           'span',
           'map-band',
           `门槛 Lv≥${def.unlock.averageLevel} · 装等≥${def.unlock.averageItemLevel} · 首领 ${def.bosses.length} 名`,
         ),
       );
+      cardHead.append(headText);
       card.append(cardHead);
       card.append(el('p', 'map-desc', def.description));
+
+      // tier 套装行(DESIGN:每 tier 出 5 件套,2/5 件效果)
+      if (def.set !== undefined) {
+        card.append(
+          el(
+            'p',
+            'raid-set-line',
+            `套装「${def.set.name}」:${def.set.slots.join('/')} 五件 —— ${def.set.effectDescription}`,
+          ),
+        );
+      }
 
       // 首领表预览:难度与硬门槛(赛前决策的信息面)
       const bosses = el('ul', 'raid-boss-list');
@@ -1748,11 +1780,26 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
         if (!unlocked) {
           open.disabled = true; // 展示性禁用:真实裁决仍在门面
           open.title = `未解锁:需${unmet.join('、')}`;
-        } else if (!check.passed) {
+        } else if (!sizeCheck.passed) {
           open.disabled = true;
-          open.title = `团队检查未通过:${check.failures[0]?.text ?? ''}`;
+          open.title = `团队检查未通过:${sizeCheck.failures[0]?.text ?? ''}`;
         }
         actions.append(open);
+        // G团接单开团(T18:20 人休闲团本,掉落整批卖给买家)
+        if (def.gRunAllowed === true) {
+          const gRun = el('button', 'pool-btn pool-btn-grun', 'G团接单开团');
+          gRun.type = 'button';
+          gRun.dataset.action = 'open-raid-grun';
+          gRun.dataset.raidId = def.id;
+          gRun.title = '以 G团形式开团:掉落整批卖给买家,金库抽成、出战团员均分打工费';
+          if (!unlocked) {
+            gRun.disabled = true;
+          } else if (!sizeCheck.passed) {
+            gRun.disabled = true;
+            gRun.title = `团队检查未通过:${sizeCheck.failures[0]?.text ?? ''}`;
+          }
+          actions.append(gRun);
+        }
       }
       card.append(actions);
       list.append(card);
@@ -1789,6 +1836,7 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
   let raidDots: HTMLSpanElement[] = [];
   let raidHpFillEl: HTMLDivElement | null = null;
   let raidHpTextEl: HTMLSpanElement | null = null;
+  let raidBossPortraitEl: HTMLImageElement | null = null;
   let raidBossNameEl: HTMLSpanElement | null = null;
   let raidBossGateEl: HTMLSpanElement | null = null;
   let raidLogEl: HTMLUListElement | null = null;
@@ -1868,7 +1916,7 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
       label.title = def.description;
       option.append(label);
       option.append(
-        el('span', 'tactic-opt-meta', `第 ${def.tier} 档 · 首领 ${def.bosses.length} 名`),
+        el('span', 'tactic-opt-meta', `第 ${def.tier} 档 · ${def.size} 人 · 首领 ${def.bosses.length} 名`),
       );
       raidOptions.append(option);
     }
@@ -2088,12 +2136,13 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
     head.append(el('span', 'raid-live-stamp', formatGameStamp(report.atGameMinutes)));
     card.append(head);
 
-    // 首领血条
+    // 首领血条(带同团本共用的旗舰首领形象,T18 精修资产)
+    raidBossPortraitEl = pixelImg(bossPortraitDataUrl(report.raidId), `${report.raidName}首领形象`, 'pixel-art raid-boss-live-portrait');
     raidBossNameEl = el('span', 'raid-boss-name', '……');
     raidBossGateEl = el('span', 'raid-boss-gate-live', '');
     raidHpTextEl = el('span', 'raid-hp-text', '100%');
     const bossTop = el('div', 'raid-boss-top');
-    bossTop.append(raidBossNameEl, raidBossGateEl, raidHpTextEl);
+    bossTop.append(raidBossPortraitEl, raidBossNameEl, raidBossGateEl, raidHpTextEl);
     raidHpFillEl = el('div', 'raid-hp-fill');
     const hpTrack = el('div', 'raid-hp');
     hpTrack.append(raidHpFillEl);
@@ -2181,6 +2230,11 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
 
   /** 进入一名首领的战斗段:更新血条头部与开场日志。 */
   function enterRaidBoss(outcome: RaidBossOutcome): void {
+    if (raidPlayerReport !== null && raidBossPortraitEl !== null) {
+      raidBossPortraitEl.src = bossPortraitDataUrl(raidPlayerReport.raidId);
+      raidBossPortraitEl.alt = `${raidPlayerReport.raidName}首领形象`;
+    }
+
     raidHp = 100;
     raidTick = 0;
     if (raidBossNameEl !== null && raidHpTextEl !== null && raidBossGateEl !== null) {
@@ -3316,15 +3370,31 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
     frag.append(el('div', 'detail-block', `${tier?.name ?? '?'} —— ${tier?.description ?? ''}`));
 
     frag.append(el('h4', 'detail-section', '装备(8 部位)'));
+    const setNameById = new Map(RAIDS.filter((raid) => raid.set !== undefined).map((raid) => [raid.set!.id, raid.set!.name]));
+    const pieceCounts = setPieceCounts(member);
     const gearList = el('ul', 'gear-list');
     for (const item of member.gear) {
       const li = el('li', 'gear-row');
       li.append(el('span', 'gear-slot', item.slot));
       li.append(el('span', `gear-quality ${QUALITY_CLASS[item.quality]}`, item.quality));
       li.append(el('span', 'gear-ilvl', `装等 ${item.itemLevel}`));
+      if (item.setId !== undefined) {
+        li.append(el('span', 'gear-set-piece', `套装「${setNameById.get(item.setId) ?? '?'}」${pieceCounts.get(item.setId) ?? 1}/5`));
+      }
       gearList.append(li);
     }
     frag.append(gearList);
+    // 生效套装(2/5 件效果:结算装等加成;数值与规则都在 sim,这里只展示)
+    const active = activeSet(member);
+    if (active !== undefined) {
+      frag.append(
+        el(
+          'p',
+          'detail-set-bonus',
+          `套装生效:「${active.name}」${active.pieces}/5 件 —— 结算装等 +${setBonusItemLevel(member)}`,
+        ),
+      );
+    }
 
     memberDetailEl.replaceChildren(frag);
   }

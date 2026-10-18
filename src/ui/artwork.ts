@@ -9,6 +9,7 @@
  */
 
 import { renderSprite } from '../art/pipeline';
+import { BOSS_PORTRAIT_BY_RAID } from '../content/boss-portraits';
 import { ICON_BY_ID, type IconId } from '../content/icons';
 import { PORTRAIT_BY_CLASS } from '../content/portraits';
 
@@ -51,6 +52,15 @@ export function iconDataUrl(id: IconId): string {
     return cachedDataUrl(def.key, () => renderSprite(def));
   }
   return cachedDataUrl('icon-unknown', () => renderSprite(ICON_UNKNOWN));
+}
+
+/** 团本首领形象 data URL(同团本共用旗舰首领形象);未登记回退灰影占位稿。 */
+export function bossPortraitDataUrl(raidId: string): string {
+  const def = BOSS_PORTRAIT_BY_RAID.get(raidId);
+  if (def !== undefined) {
+    return cachedDataUrl(def.key, () => renderSprite(def));
+  }
+  return cachedDataUrl('portrait-unknown', () => renderSprite(PORTRAIT_UNKNOWN));
 }
 
 /** 统一像素 <img> 构造:alt 必填(可访问性),尺寸由 CSS 决定。 */

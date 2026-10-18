@@ -22,7 +22,12 @@ import { COMP } from '../content/comp';
 import { composeSquad, memberRole } from './comp';
 import { assessEncounter, rollEncounterOutcome } from './encounter';
 import { evaluateUnlockGates } from './ladder';
-import { averageItemLevel, guildAverageItemLevel, guildAverageLevel } from './roster';
+import {
+  averageItemLevel,
+  effectiveItemLevel,
+  guildAverageItemLevel,
+  guildAverageLevel,
+} from './roster';
 import { nextInt, pickOne, pickWeighted } from './rng';
 import type { DropOutcome, DungeonRunReport, Member, Squad } from './state';
 
@@ -86,13 +91,15 @@ export function squadDungeonReadiness(
   return { ready: reasons.length === 0, reasons };
 }
 
-/** 一件掉落(部位 + 品质 + 装等,可携带战场向属性;穿戴去向由择优规则另行计算)。 */
+/** 一件掉落(部位 + 品质 + 装等,可携带战场向属性与套装 id;穿戴去向由择优规则另行计算)。 */
 export interface DroppedItem {
   readonly slot: GearSlot;
   readonly quality: Quality;
   readonly itemLevel: number;
   /** 战场向属性(军装兑换才有;缺省 = 无)。 */
   readonly pvpPower?: number;
+  /** tier 套装 id(T18:团本紫装落在套装部位上即携带;缺省 = 非套装)。 */
+  readonly setId?: string;
 }
 
 /**
@@ -112,10 +119,18 @@ export function rollDrops(
   return rollDropItems(rngState, qualityRules, def.dropItemLevel, count, DUNGEON_SETTLEMENT.dropJitter);
 }
 
+/** 套装绑定(T18):掷出紫装且部位属于套装部位 ⇒ 该件即套装件(不另掷随机)。 */
+export interface DropSetBinding {
+  readonly id: string;
+  readonly slots: readonly GearSlot[];
+}
+
 /**
  * 通用掉落掷取(5 人本与团本共用;数据驱动):
  * 每件抽取顺序固定 = 部位(8 部位等概率)→ 品质(给定权重)→ 装等扰动;
  * 装等 = 基准 + 品质加成 ± 扰动(下限 1)。
+ * 传入套装绑定(团本 tier 套装)时:紫装且部位 ∈ 套装部位 ⇒ 携带套装 id
+ * (DESIGN「团本 tier 出 5 件套」的掉落面;随机消费与不带绑定完全一致)。
  */
 export function rollDropItems(
   rngState: number,
@@ -123,6 +138,7 @@ export function rollDropItems(
   baseItemLevel: number,
   count: number,
   jitter: number,
+  setBinding?: DropSetBinding,
 ): [items: DroppedItem[], nextState: number] {
   let rng = rngState;
   const items: DroppedItem[] = [];
@@ -133,10 +149,15 @@ export function rollDropItems(
       QUALITY_RULES.find((rule) => rule.quality === qualityRule.quality)?.itemLevelBonus ?? 0;
     const [jitterRoll, afterJitter] = nextInt(afterQuality, -jitter, jitter);
     rng = afterJitter;
+    const isSetPiece =
+      setBinding !== undefined &&
+      qualityRule.quality === '紫' &&
+      setBinding.slots.includes(slot);
     items.push({
       slot,
       quality: qualityRule.quality,
       itemLevel: Math.max(1, baseItemLevel + bonus + jitterRoll),
+      ...(isSetPiece ? { setId: setBinding.id } : {}),
     });
   }
   return [items, rng];
@@ -160,8 +181,8 @@ export function bestWearer(
 }
 
 /** 换装:替换该部位装备(不可变:返回新 gear 数组;部位缺失时追加到末尾)。
- * 军装的战场向属性(pvpPower)随之入格;紫装同时计入功绩统计 rareLootWon
- * (名人堂陈列;T12)—— 全项目换装的唯一入口。 */
+ * 军装的战场向属性(pvpPower)与 tier 套装 id(setId)随之入格;紫装同时计入
+ * 功绩统计 rareLootWon(名人堂陈列;T12)—— 全项目换装的唯一入口。 */
 export function equipItem(member: Member, item: DroppedItem): Member {
   const index = member.gear.findIndex((gear) => gear.slot === item.slot);
   const piece = {
@@ -169,6 +190,7 @@ export function equipItem(member: Member, item: DroppedItem): Member {
     quality: item.quality,
     itemLevel: item.itemLevel,
     ...(item.pvpPower !== undefined ? { pvpPower: item.pvpPower } : {}),
+    ...(item.setId !== undefined ? { setId: item.setId } : {}),
   };
   const gear =
     index === -1
@@ -246,8 +268,9 @@ export function settleDungeonDay(params: SettleDungeonDayParams): SettleDungeonD
       const composition = composeSquad(squad, ordinal, squadMembers);
       const auraBonusPercent =
         composition.auraBonus['伤害'] + composition.auraBonus['生存'] + composition.auraBonus['治疗'];
+      // 结算装等含套装加成(T18,2/5 件效果):名册展示仍用原始装等
       const squadAverageItemLevel =
-        squadMembers.reduce((sum, member) => sum + averageItemLevel(member), 0) / squadMembers.length;
+        squadMembers.reduce((sum, member) => sum + effectiveItemLevel(member), 0) / squadMembers.length;
 
       const assessment = assessEncounter(
         { averageItemLevel: squadAverageItemLevel, roleCounts: composition.roleCounts, auraBonusPercent },

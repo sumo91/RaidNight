@@ -326,7 +326,12 @@ describe('申请池规格:声望阶位驱动(纯函数,T12 真值)', () => {
     expect(mid.count).toBeGreaterThan(low.count);
     expect(high.count).toBe(RECRUIT.poolCount.maxCount);
     expect(mid.levelRange[0]).toBeGreaterThan(low.levelRange[0]);
-    expect(high.levelRange[0] - low.levelRange[0]).toBe(RECRUIT.poolQuality.levelBonusCap);
+    expect(high.levelRange[0] - low.levelRange[0]).toBe(
+      Math.min(
+        RECRUIT.poolQuality.levelBonusCap,
+        Math.floor(21 / RECRUIT.poolQuality.rungsPerLevelBonus),
+      ),
+    );
 
     const topAt = (spec: typeof low) => spec.skillTiers.find((t) => t.id === 'top')!.weight;
     const rookieAt = (spec: typeof low) => spec.skillTiers.find((t) => t.id === 'rookie')!.weight;

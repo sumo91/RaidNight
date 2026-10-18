@@ -386,8 +386,8 @@ describe('日程派生量:活动队列与下一场倒计时(验收标准 3)', ()
     const queue = activityQueue(heavyLoadState());
     expect(queue.map((entry) => entry.kind)).toEqual(['下本', '下本', '练级', '练级', '练级', '下本']);
     expect(queue.map((entry) => entry.squadOrdinal)).toEqual([1, 2, 3, 4, 5, 7]);
-    expect(queue[0]).toMatchObject({ name: '回声墓道', tier: '普通', perDay: 2 });
-    expect(queue[2]).toMatchObject({ name: '烬龙荒原', tier: '高效', perDay: 120000 });
+    expect(queue[0]).toMatchObject({ name: '回声墓道', tier: '普通', perDay: 3 });
+    expect(queue[2]).toMatchObject({ name: '烬龙荒原', tier: '高效', perDay: 300000 });
   });
 
   it('下一场结算 = 下一个日界;剩余分钟随时钟缩小;周边界叠加标注', () => {

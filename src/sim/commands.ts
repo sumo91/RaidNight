@@ -53,8 +53,13 @@ export type GuildCommand =
    * (军衔不足/荣誉点不足/未知单件由门面忽略)。
    */
   | { readonly type: 'redeemHonorGear'; readonly memberId: number; gearId: string }
-  /** 开团(计划层:安排下一个团本夜;内容阶梯未解锁/团队检查未过由门面忽略) */
-  | { readonly type: 'openRaid'; readonly raidId: string }
+  /**
+   * 开团(计划层:安排下一个团本夜;内容阶梯未解锁/团队检查未过由门面忽略)。
+   * gRun = true 时以 G团接单开团(T18,GLOSSARY:G团):掉落整批卖给买家,
+   * 金库抽成 + 出战团员均分打工费;仅开放接单的团本(20 人休闲团本)生效,
+   * 其余团本忽略该标记(照常公会团)。
+   */
+  | { readonly type: 'openRaid'; readonly raidId: string; readonly gRun?: boolean }
   /** 取消开团安排(本周不开团) */
   | { readonly type: 'cancelRaid' }
   /**

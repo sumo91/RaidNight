@@ -141,6 +141,9 @@ export interface TeamCheckResult {
  * 团队检查(GLOSSARY:团队 = 最多 8 小队的团本出战阵容):
  * 满员小队数、总坦克、总治疗达到门槛,且每支小队至少 1 坦 1 奶(职能覆盖)。
  * 开团指令裁决与团本夜结算(门面)共用同一判定。
+ * 规模折算(T18,20 人休闲团本):满员小队数与总治疗按 size/5、总坦克按
+ * size/10 折算 —— 40 人 = 8 支/4 坦/8 奶(即内容表 COMP.teamCheck 的值),
+ * 20 人 = 4 支/2 坦/4 奶;职能覆盖只查参战的前 size/5 支小队。
  */
 export function teamCheck(state: GameState): TeamCheckResult {
   return teamCheckOf(state.members, state.squads);
@@ -150,6 +153,7 @@ export function teamCheck(state: GameState): TeamCheckResult {
 export function teamCheckOf(
   members: readonly Member[],
   squads: readonly Squad[],
+  size: 20 | 40 = 40,
 ): TeamCheckResult {
   const memberById = new Map(members.map((member) => [member.id, member]));
   const compositions = squads.map((squad, index) =>
@@ -170,23 +174,26 @@ export function teamCheckOf(
     dps: compositions.reduce((sum, c) => sum + c.roleCounts['输出'], 0),
   };
 
+  const requiredFullSquads = Math.max(1, Math.round(size / COMP.squadSize));
+  const minTanks = Math.max(1, Math.round(size / 10));
+  const minHealers = Math.max(1, Math.round(size / COMP.squadSize));
   const failures: TeamCheckFailure[] = [];
-  if (totals.fullSquads < COMP.teamCheck.requiredFullSquads) {
+  if (totals.fullSquads < requiredFullSquads) {
     failures.push({
       kind: '满编',
-      text: `满员小队不足:${totals.fullSquads}/${COMP.teamCheck.requiredFullSquads} 支`,
+      text: `满员小队不足:${totals.fullSquads}/${requiredFullSquads} 支`,
     });
   }
-  if (totals.tanks < COMP.teamCheck.minTanks) {
-    failures.push({ kind: '总坦克', text: `总坦克不足:${totals.tanks}/${COMP.teamCheck.minTanks}` });
+  if (totals.tanks < minTanks) {
+    failures.push({ kind: '总坦克', text: `总坦克不足:${totals.tanks}/${minTanks}` });
   }
-  if (totals.healers < COMP.teamCheck.minHealers) {
+  if (totals.healers < minHealers) {
     failures.push({
       kind: '总治疗',
-      text: `总治疗不足:${totals.healers}/${COMP.teamCheck.minHealers}`,
+      text: `总治疗不足:${totals.healers}/${minHealers}`,
     });
   }
-  for (const composition of compositions) {
+  for (const composition of compositions.slice(0, requiredFullSquads)) {
     const roleGaps = composition.gaps.filter((gap) => gap.kind === '坦克' || gap.kind === '治疗');
     if (roleGaps.length > 0) {
       failures.push({

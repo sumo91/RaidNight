@@ -102,7 +102,7 @@ function econRaidState(
   },
 ): GameState {
   const base = new SimulationFacade(options?.seed ?? SEED, '经济测试公会').state;
-  const itemLevel = options?.itemLevel ?? 67;
+  const itemLevel = options?.itemLevel ?? 34;
   const gold = options?.personalGold ?? 0;
   const dkp = options?.dkp ?? 0;
   const members: Member[] = [];

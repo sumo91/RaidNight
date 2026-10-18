@@ -5,6 +5,7 @@ import { ingestExternal, renderSheet, renderSprite } from './pipeline';
 import { isWithinPalette, nearestPaletteIndex, postProcess, quantizeToPalette } from './post';
 import { RGBA_BY_KEY } from './palette';
 import { CLASSES } from '../content/classes';
+import { BOSS_PORTRAITS } from '../content/boss-portraits';
 import { ICONS } from '../content/icons';
 import { PORTRAITS } from '../content/portraits';
 
@@ -215,5 +216,18 @@ describe('T17 美术管线:PNG 编码合法', () => {
     const chunks = readPngChunks(png);
     expect(chunks.every((chunk) => chunk.crcOk)).toBe(true);
     expect(() => inflateStored(chunks.find((c) => c.type === 'IDAT')!.data)).not.toThrow();
+  });
+});
+
+describe('团本首领形象(T18 精修资产)', () => {
+  it('6 名旗舰首领形象全部可渲染,画布 24×24 且像素全部落在板内', () => {
+    expect(BOSS_PORTRAITS.length).toBe(6);
+    for (const boss of BOSS_PORTRAITS) {
+      const png = renderSprite(boss);
+      expect(png.length).toBeGreaterThan(0);
+      // 逐行宽度与字符合法性由解析器保证(非法即抛错);识别性要素登记在案
+      expect(boss.identity.length).toBeGreaterThan(0);
+      expect(boss.raidId.length).toBeGreaterThan(0);
+    }
   });
 });

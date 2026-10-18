@@ -155,12 +155,12 @@ describe('公会平均等级与地图解锁(验收标准 1)', () => {
     expect(guildAverageLevel(state.members)).toBeGreaterThanOrEqual(8); // 建会均值约 9-11
   });
 
-  it('练级成长抬高平均等级:跨过 14 后第 2 阶段两张地图解锁', () => {
+  it('练级成长抬高平均等级:跨过 11 后第 2 阶段两张地图解锁', () => {
     const facade = setupLevelingSquad(SEED);
     facade.dispatch({ command: { type: 'assignLevelingMap', squadId: 1, mapId: 'quarry-camp' }, deltaGameMinutes: 0 });
     expect(levelingMapStatuses(facade.state.members).filter((s) => s.unlocked)).toHaveLength(2);
 
-    // 逐日推进直到第 2 阶段解锁(高效区日入数级经验,数日内即跨 14)
+    // 逐日推进直到第 2 阶段解锁(高效区日入数级经验,数日内即跨 11)
     let days = 0;
     while (
       levelingMapStatuses(facade.state.members).filter((s) => s.unlocked).length < 4 &&
@@ -170,7 +170,7 @@ describe('公会平均等级与地图解锁(验收标准 1)', () => {
       days += 1;
     }
     expect(days).toBeLessThan(21); // 真实成长把平均等级推过了门槛
-    expect(guildAverageLevel(facade.state.members)).toBeGreaterThanOrEqual(14);
+    expect(guildAverageLevel(facade.state.members)).toBeGreaterThanOrEqual(11);
 
     // 解锁后:第 2 阶段的休闲区也可进驻(此前会被门面拒绝,见下一组用例)
     const assigned = facade.dispatch({
@@ -305,15 +305,15 @@ describe('一日结算:固定时间跳变的成长与疲劳数值(验收标准 2
   });
 
   it('满级:等级封顶、经验清零不再累计,疲劳照常积累', () => {
-    // 59 级团员在灰烬矿道:首日不足以升级(20000 < 59 级需求),次日跨过 60 后经验清零
+    // 59 级团员在霜风隘口:首日不足以升级(21000 < 59 级需求),次日跨过 60 后经验清零
     const state = stateWith(
       [synthMember(1, 59), synthMember(2, 60)],
-      [{ id: 1, memberIds: [1, 2], activity: { type: 'leveling', mapId: 'cinder-mine' } }],
+      [{ id: 1, memberIds: [1, 2], activity: { type: 'leveling', mapId: 'frostwind-pass' } }],
     );
     const day1 = step(state, { deltaGameMinutes: GAME_MINUTES_PER_DAY });
     const m1 = day1.state.members[0]!;
     const m2 = day1.state.members[1]!;
-    expect(m1.level).toBe(59); // 20000×效率 < 59 级需求
+    expect(m1.level).toBe(59); // 21000×效率 < 59 级需求
     expect(m1.experience).toBeGreaterThan(0);
     expect(m2.level).toBe(60); // 满级不超上限
     expect(m2.experience).toBe(0); // 满级经验恒为 0

@@ -12,6 +12,41 @@
       "sha256": "25ef2128098a5922cb422be4a14634941b7b51df44c3bcdea57e056fc577c06c"
     },
     {
+      "file": "bosses.png",
+      "bytes": 677830,
+      "sha256": "5d2f3ff8a1413837f835397376b63f1c79752d2f38ae72769a04157ee37bea41"
+    },
+    {
+      "file": "boss-molten-lord-malgar.png",
+      "bytes": 2396,
+      "sha256": "49c3520539436de5cda2b022fd2631e357ae295660b5e9e82722b8a45bba005e"
+    },
+    {
+      "file": "boss-verdant-high-priest.png",
+      "bytes": 2396,
+      "sha256": "079f24d2f0bb1a31c4a3905c5469795bc01cc4b9c858accb68ac0a4d6cf29b84"
+    },
+    {
+      "file": "boss-ashwing-kharax.png",
+      "bytes": 2396,
+      "sha256": "97fe90968edc39f00b9284fed7c2ebeb0065575a22cd6e9fe18d7610fff3398e"
+    },
+    {
+      "file": "boss-mausoleum-sovereign.png",
+      "bytes": 2396,
+      "sha256": "4a584ffad1456600f6e32eb3c3cd009c8f53b797c1a3fd0cbbf4481c7f234121"
+    },
+    {
+      "file": "boss-twilight-archon-zenoras.png",
+      "bytes": 2396,
+      "sha256": "91b3009ec8b1282bf427ac498542b757a38106fbe9ec1afdcee6ddb4b7a05f8c"
+    },
+    {
+      "file": "boss-lich-king-varogas.png",
+      "bytes": 2396,
+      "sha256": "b348723410c445bc2b78822ced4091ff1b0f226ca17deba383de93c2982670f3"
+    },
+    {
       "file": "warrior.png",
       "bytes": 2396,
       "sha256": "44d6eccaa4cbf6273940e7c06f1ed27df82cfc4e21f106498cdc9aaade4ccd4a"

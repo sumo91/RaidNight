@@ -21,7 +21,7 @@ import { equipItem, settleDungeonDay, squadDungeon, squadDungeonReadiness } from
 import { settleExternalDay, squadExternalActivity } from './economy';
 import type { SimEvent, SimEventKind } from './events';
 import { evaluateUnlockGates } from './ladder';
-import { teamCheck, teamCheckOf } from './comp';
+import { teamCheckOf } from './comp';
 import { guildAverageItemLevel, guildAverageLevel } from './roster';
 import { settleLevelingDay, squadLevelingMap } from './leveling';
 import {
@@ -346,21 +346,29 @@ function applyCommand(state: GameState, command: GuildCommand, collector: EventC
       if (!unlock.unlocked) {
         return state; // 未解锁:忽略
       }
-      // 团队检查:通过后方可开团(验收标准 1)
-      if (!teamCheck(state).passed) {
+      // 团队检查:按团本规模折算(40 人 = 8 支满员小队;20 人休闲本 = 4 支)
+      if (!teamCheckOf(state.members, state.squads, raid.size).passed) {
         return state; // 阵容不齐:忽略(编成页会标示缺口)
       }
-      if (state.raidPlan?.raidId === raid.id) {
-        return state; // 已开同一团本:无变化、无事件
+      // G团接单只对开放接单的团本生效(20 人休闲团本;其余照常公会团)
+      const gRun = command.gRun === true && raid.gRunAllowed === true;
+      if (state.raidPlan?.raidId === raid.id && state.raidPlan.mode === (gRun ? 'gRun' : undefined)) {
+        return state; // 已开同一团本同一模式:无变化、无事件
       }
       collector.push(
         state.clockGameMinutes,
         '团本',
-        `已开团:「${raid.name}」—— 团本夜定于周边界打响,按首领顺序逐个结算。`,
+        gRun
+          ? `已开团(G团接单):「${raid.name}」—— 团本夜掉落整批卖给买家,金库抽成、打工者均分;按首领顺序逐个结算。`
+          : `已开团:「${raid.name}」—— 团本夜定于周边界打响,按首领顺序逐个结算。`,
       );
       return {
         ...state,
-        raidPlan: { raidId: raid.id, openedAtGameMinutes: state.clockGameMinutes },
+        raidPlan: {
+          raidId: raid.id,
+          openedAtGameMinutes: state.clockGameMinutes,
+          ...(gRun ? { mode: 'gRun' as const } : {}),
+        },
       };
     }
     case 'cancelRaid': {
@@ -758,7 +766,7 @@ function autoOpenPerWeeklyPlan(
     );
     return undefined;
   }
-  const check = teamCheckOf(members, squads);
+  const check = teamCheckOf(members, squads, raid.size);
   if (!check.passed) {
     collector.push(
       atGameMinutes,

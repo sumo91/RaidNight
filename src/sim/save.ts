@@ -46,8 +46,12 @@ export const SAVE_KIND = 'wowidle-save';
  * - v12(T16):PvP —— 状态新增荣誉账本 honor(荣誉点 + 生涯荣誉,旧档从
  *   零补:零荣誉、列兵起家)与可缺省的最近战场结果卡 lastBattlefieldReport;
  *   荣誉墙新增军衔记录 rankLadder(旧档补空数组);小队活动含战场(battlefield)。
+ * - v13(T18):内容补全 —— 装备件可带 tier 套装 id(setId,旧档无 = 非套装,
+ *   套装加成按 0 计);开团安排可带 G团接单标记(mode: 'gRun',旧档无 = 公会团);
+ *   团本夜报告新增规模(size)与 G团结算摘要(gRun),全部可缺省,
+ *   旧档不迁移即兼容(恒等迁移仅记版次)。
  */
-export const SAVE_VERSION = 12;
+export const SAVE_VERSION = 13;
 
 /** 版本化存档封皮:v1–v3 的本机旧档没有 kind,读入时视为 legacy。 */
 export interface SaveFile {
@@ -171,6 +175,9 @@ const MIGRATIONS: Readonly<Record<number, Migration>> = {
         ? { ...state.honorWall, rankLadder: state.honorWall.rankLadder ?? [] }
         : createEmptyHonorWall(),
   }),
+  // v12 → v13:内容补全(T18)—— setId / mode / size / gRun 全部可缺省,
+  // 旧档即兼容(无套装件 = 无套装加成;无 mode = 公会团);恒等迁移仅记版次
+  12: (state) => state,
 };
 
 /** 编码:状态 → 存档文本(localStorage 值与导出文件内容共用)。 */

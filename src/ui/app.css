@@ -2900,3 +2900,67 @@ button.tactic-opt:hover:not(:disabled) {
 .report-drop {
   align-items: center;
 }
+
+/* ———— T18:团本卡片的首领形象 / 规模标签 / 套装行 / G团按钮 ———— */
+.map-head-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.map-head-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.raid-boss-portrait {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: #171226;
+}
+
+.map-tier-casual {
+  color: var(--accent);
+}
+
+.raid-set-line {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--gold, #d4a017);
+}
+
+.pool-btn-grun {
+  background: #3d2f18;
+  border-color: #8a6f33;
+  color: #e8d391;
+}
+
+/* 直播视图:血条头的首领形象 */
+.raid-boss-live-portrait {
+  flex: none;
+  width: 34px;
+  height: 34px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: #171226;
+}
+
+/* 团员详情:套装件标注与生效行 */
+.gear-set-piece {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--gold, #d4a017);
+}
+
+.detail-set-bonus {
+  margin: 6px 0 0;
+  font-size: 12.5px;
+  color: var(--gold, #d4a017);
+}

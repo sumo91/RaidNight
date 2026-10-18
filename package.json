@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "test": "vitest run --configLoader runner",
     "test:watch": "vitest --configLoader runner",
-    "gen:art": "vite-node --configLoader runner scripts/gen-art.ts"
+    "gen:art": "vite-node --configLoader runner scripts/gen-art.ts",
+    "sim:round": "vite-node --configLoader runner scripts/sim-round.ts"
   },
   "devDependencies": {
     "@types/node": "^26.6.5",

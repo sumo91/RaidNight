@@ -224,8 +224,8 @@ describe('解锁门槛生效:未达标不可进入(验收标准 2,经门面)', (
   });
 
   it('装等未达标(等级已过线):同样被忽略 —— 装等是独立生效的第二维门槛', () => {
-    const advanced = DUNGEON_BY_ID.get('clockwork-deepcity') as DungeonDef; // 门槛 {22,18}
-    const facade = new SimulationFacade(SEED, '测试公会', squadState(standardSquad(30, 17)));
+    const advanced = DUNGEON_BY_ID.get('clockwork-deepcity') as DungeonDef; // 门槛 {21,26}
+    const facade = new SimulationFacade(SEED, '测试公会', squadState(standardSquad(30, 25)));
     const blocked = facade.dispatch({
       command: { type: 'assignDungeon', squadId: 1, dungeonId: advanced.id },
       deltaGameMinutes: 0,
@@ -233,8 +233,8 @@ describe('解锁门槛生效:未达标不可进入(验收标准 2,经门面)', (
     expect(blocked.events).toEqual([]);
     expect(facade.state.squads[0]?.activity).toBeUndefined();
 
-    // 换上达标装备(名册装等 17 → 18)后,同一指令获准 —— 门槛随装等成长放开
-    const geared = squadState(standardSquad(30, 18));
+    // 换上达标装备(名册装等 25 → 26)后,同一指令获准 —— 门槛随装等成长放开
+    const geared = squadState(standardSquad(30, 26));
     facade.restore(geared);
     const assigned = facade.dispatch({
       command: { type: 'assignDungeon', squadId: 1, dungeonId: advanced.id },

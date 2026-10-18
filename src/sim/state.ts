@@ -97,6 +97,8 @@ export type SquadActivity =
 /**
  * 单件装备:部位 + 品质 + 装等(物品表见后续装备工单)。
  * pvpPower = 军装的战场向属性(T16):只在战场结算计入战力,PvE 结算不计。
+ * setId = tier 套装 id(T18,DESIGN「团本 tier 出 5 件套」):团本紫装落在
+ * 套装部位上即携带;同套装穿满 2 件起效(见 sim/roster.effectiveItemLevel)。
  */
 export interface GearItem {
   readonly slot: GearSlot;
@@ -104,6 +106,8 @@ export interface GearItem {
   readonly itemLevel: number;
   /** 战场向属性加成(军装才有;缺省 = 无)。 */
   readonly pvpPower?: number;
+  /** tier 套装 id(团本套装件才有;缺省 = 非套装)。 */
+  readonly setId?: string;
 }
 
 /** 一件掉落的去向:5 人本为自动择优穿戴;团本按分配制度归属(经济字段见 sim/economy.ts)。 */
@@ -125,6 +129,10 @@ export interface DropOutcome {
   readonly dkpPaid?: number;
   /** 自肥件(会长裁量制 + 自肥生效) */
   readonly selfDealt?: boolean;
+  /** G团整批售价(T18,G团接单的夜才有:掉落卖给买家,不穿戴)。 */
+  readonly soldGold?: number;
+  /** tier 套装件(T18:团本紫装落在套装部位上)。 */
+  readonly setId?: string;
   /** 未穿戴原因(缺省 = 无人可提升;流拍 = 出不起价) */
   readonly unequippedReason?: '流拍';
 }
@@ -266,11 +274,16 @@ export interface WeeklyPlan {
  * 团本夜 = 下一个游戏周边界(团本 CD = 游戏周,DESIGN):门面在跨过
  * 周边界时按首领顺序整夜结算,夜结束安排即清空(下周重新开团 ——
  * 有周计划时由自动层照计划重开,T15)。
+ * mode(T18):'gRun' = 以 G团接单开团(GLOSSARY:G团 = 以金币结算装备
+ * 归属的团本形式;掉落整批卖给买家,金库抽成 + 打团者均分打工费),
+ * 仅开放接单的团本(20 人休闲团本)可设;缺省 = 公会团(按分配制度穿装备)。
  */
 export interface RaidPlan {
   readonly raidId: string;
   /** 开团时刻(游戏分钟;展示用)。 */
   readonly openedAtGameMinutes: number;
+  /** G团接单标记(缺省 = 公会团)。 */
+  readonly mode?: 'gRun';
   /** 赛前决策(T14;缺省 = 全不启用)。 */
   readonly tactics?: RaidTactics;
 }
@@ -340,6 +353,8 @@ export interface RaidNightReport {
   readonly raidId: string;
   readonly raidName: string;
   readonly atGameMinutes: number;
+  /** 团本规模(T18:40 人主力 / 20 人休闲;直播点阵的行数 = size/5)。 */
+  readonly size: 20 | 40;
   /** 出战阵容快照(点阵的一行 = 一支小队;按小队顺序)。 */
   readonly lineup: readonly {
     readonly squadOrdinal: number;
@@ -347,7 +362,7 @@ export interface RaidNightReport {
     readonly role: string;
     readonly itemLevel: number;
   }[];
-  /** 全团平均装等(结算时刻)。 */
+  /** 全团平均装等(结算时刻,含套装加成)。 */
   readonly teamItemLevel: number;
   /** 按顺序的首领结算结果。 */
   readonly bosses: readonly RaidBossOutcome[];
@@ -362,6 +377,8 @@ export interface RaidNightReport {
   readonly loot?: RaidLootFlow;
   /** 本夜赛前决策的生效快照(T14;未做任何决策时为 undefined)。 */
   readonly tactics?: RaidTacticsEffect;
+  /** G团接单结算摘要(T18;公会团的夜为 undefined)。 */
+  readonly gRun?: RaidGRunFlow;
 }
 
 /** 团本夜的分配结算摘要:三种制度的金币流向与忠诚/心情代价对照(金库页与测试断言共用)。 */
@@ -376,8 +393,21 @@ export interface RaidLootFlow {
   readonly selfDealtCount: number;
   /** 夜末出席团员的忠诚调整(制度心态,内容表;会长角色除外)。 */
   readonly attendeeLoyaltyPerNight: number;
-  /** 夜末出席团员的心情调整(内容表)。 */
+  /** 夜末出席团员的心情调整(制度心态,内容表)。 */
   readonly attendeeMoodPerNight: number;
+}
+
+/**
+ * G团接单夜的结算摘要(T18,GLOSSARY:G团/打工):
+ * 掉落整批卖给买家,收入 = 金库抽成 + 出战团员均分打工费(归个人金)。
+ */
+export interface RaidGRunFlow {
+  /** 卖出的掉落件数(团灭止步则只卖已杀首领的掉落)。 */
+  readonly dropsSold: number;
+  /** 本夜入金库金币(抽成 + 除不尽的零头)。 */
+  readonly vaultGoldIn: number;
+  /** 每名出战团员分得的打工费(个人金进账)。 */
+  readonly goldPerRaider: number;
 }
 
 /** 公会信息:玩家管理的核心成长主体。 */

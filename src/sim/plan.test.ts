@@ -405,8 +405,8 @@ describe('自动层暂缓:门槛与团队检查(验收标准 1、2 的边界)', 
   });
 
   it('未解锁的团本:计划可设(为将来准备),开团暂缓并给出未达标项', () => {
-    // 装等 60 < 门槛 62:内容阶梯未达
-    const state = planReadyState({ itemLevel: 60 });
+    // 装等 20 < 门槛 25:内容阶梯未达
+    const state = planReadyState({ itemLevel: 20 });
     const set = step(state, {
       command: { type: 'setWeeklyPlan', goal: 'progress', raidId: RAID.id },
       deltaGameMinutes: 0,

@@ -16,6 +16,15 @@ export interface RecruitConfig {
    * 档位加成(sim/reputation.rosterCapForRung),大厅建设属后续工单。
    */
   readonly baseRosterCap: number;
+  /**
+   * 申请池的职能保底(T18):每日刷新的池子里至少一名坦克职能与一名治疗职能
+   * —— 满职能小队是一切活动的前提,池子长期不出坦/奶会让组建无从谈起
+   * (确定性:不足时把首份申请的职业与专精改写为保底项,不追加随机)。
+   */
+  readonly poolRoleGuarantee: {
+    readonly tank: { readonly classId: string; readonly specId: string };
+    readonly healer: { readonly classId: string; readonly specId: string };
+  };
   /** 申请池数量参数(阶位驱动)。 */
   readonly poolCount: {
     /** 基础份数(0 阶「无名小会」时每日的申请数)。 */
@@ -44,6 +53,10 @@ export interface RecruitConfig {
 
 export const RECRUIT: RecruitConfig = {
   baseRosterCap: 6,
+  poolRoleGuarantee: {
+    tank: { classId: 'warrior', specId: 'warrior-guard' },
+    healer: { classId: 'priest', specId: 'priest-light' },
+  },
   poolCount: {
     baseCount: 3,
     maxCount: 8,
@@ -51,8 +64,8 @@ export const RECRUIT: RecruitConfig = {
   },
   poolQuality: {
     baseLevelRange: [8, 11],
-    rungsPerLevelBonus: 4,
-    levelBonusCap: 4,
+    rungsPerLevelBonus: 2,
+    levelBonusCap: 21,
     skillTierBias: [
       { tierId: 'top', bias: 3.0 },
       { tierId: 'expert', bias: 1.8 },

@@ -1,11 +1,18 @@
 /**
- * 团本夜活动:第一档 40 人团本的整夜结算(T10)。
+ * 团本夜活动:团本的整夜结算(T10 起步,T18 全量:40 人主力 + 20 人休闲 + G团接单)。
  *
  * 成败走统一结算引擎(sim/encounter.ts,与 5 人本同一套):
- * 团队战力 = (全团平均装等 + 职能分) × (1 + 各小队光环合计的平均%);
- * 首领可设「装等硬门槛」—— 全团平均装等不达标 ⇒ 必败,无论战力。
+ * 团队战力 = (全团平均结算装等 + 职能分) × (1 + 各小队光环合计的平均%);
+ * 结算装等含 tier 套装加成(2/5 件效果,T18,DESIGN「装备」);
+ * 首领可设「装等硬门槛」—— 全团平均结算装等不达标 ⇒ 必败,无论战力。
+ * 团队检查按团本规模折算(sim/comp.teamCheckOf):20 人本只带前 4 支满员小队。
  * 一切可调数值在 content/raids.ts(数据驱动);纯函数、只走注入的种子随机链
  * (每首领一次成败掷点 → 胜利掉落抽取,顺序固定)。
+ *
+ * G团接单(T18,GLOSSARY:G团 = 以金币结算装备归属的团本形式):
+ * 开团安排带 mode: 'gRun' 且团本开放接单(20 人休闲团本)时,掉落整批
+ * 卖给随团买家 —— 成交价金库抽成 + 出战团员均分打工费(个人金);
+ * 不走分配制度、不记 DKP、不适用制度心态(打工性质)。
  *
  * 开荒决策面(T14,DESIGN):开团安排可携带三项赛前决策 —— 消耗品预算
  * (content/raid-tactics 的拨款档)、世界 Buff(启用时刻距团本夜足额筹备才生效)、
@@ -13,14 +20,21 @@
  * 首领的战力评估;决策随安排在夜末清空(时效 = 当夜)。
  *
  * 演出级别(DESIGN「三级演出」):团本 = 直播视图 —— 结算产出结构化
- * RaidNightReport(首领血条、40 人点阵、滚动战斗日志的数据面)与逐条文本
+ * RaidNightReport(首领血条、团队点阵、滚动战斗日志的数据面)与逐条文本
  * (经门面入事件流);赛前决策(开团/编成/预算/Buff/阵形)在赛前完成,
  * 赛中只观赛不可介入。
  * 团灭代价 = 修理金(公会金库,余额封顶)+ 疲劳 + 士气(心情),无永久损失:
  * 名册不动、忠诚不动、装备不丢,下个团本夜再战(开荒)。
  */
 
-import { RAID_BY_ID, RAID_DROP_QUALITY, RAID_SETTLEMENT, RAIDS, type RaidDef } from '../content/raids';
+import {
+  G_RUN,
+  RAID_BY_ID,
+  RAID_DROP_QUALITY,
+  RAID_SETTLEMENT,
+  RAIDS,
+  type RaidDef,
+} from '../content/raids';
 import type { WeeklyGoalDef } from '../content/plan';
 import {
   CONSUMABLE_TIER_BY_ID,
@@ -46,7 +60,7 @@ import {
 } from './economy';
 import { assessEncounter, encounterPower, type EncounterModifiers } from './encounter';
 import { evaluateUnlockGates } from './ladder';
-import { averageItemLevel, guildAverageItemLevel, guildAverageLevel } from './roster';
+import { averageItemLevel, effectiveItemLevel, guildAverageItemLevel, guildAverageLevel } from './roster';
 import { nextFloat } from './rng';
 import type {
   DropOutcome,
@@ -77,12 +91,12 @@ export function raidStatuses(members: readonly Member[]): readonly RaidStatus[] 
   });
 }
 
-/** 团队出战摘要:40 人(8 小队 × 5)的战力三要素聚合(统一结算引擎的输入)。 */
+/** 团队出战摘要:团队(40 人 = 8 小队 / 20 人 = 4 小队)的战力三要素聚合(统一结算引擎的输入)。 */
 export interface RaidTeamSummary {
   /** 出战团员(按小队顺序、队内顺序解析成实体)。 */
   readonly members: readonly Member[];
   readonly teamSize: number;
-  /** 全团平均装等(硬门槛与战力的装等刻度)。 */
+  /** 全团平均结算装等(含套装加成;硬门槛与战力的装等刻度)。 */
   readonly averageItemLevel: number;
   /** 职能结构:全团坦克/治疗/输出计数(职能分由引擎按封顶计入)。 */
   readonly roleCounts: Readonly<Record<Role, number>>;
@@ -91,16 +105,22 @@ export interface RaidTeamSummary {
   readonly auraBonusPercent: number;
 }
 
-/** 解析团队的出战阵容与战力三要素(团队检查通过时 = 8 支满员小队)。 */
+/**
+ * 解析团队的出战阵容与战力三要素(团队检查通过时 = size/5 支满员小队)。
+ * 20 人休闲团本只带编成顺序的前 4 支小队(T18);结算装等含套装加成
+ * (2/5 件效果,DESIGN「装备」)。
+ */
 export function raidTeam(
   members: readonly Member[],
   squads: readonly Squad[],
+  size: 20 | 40 = 40,
 ): RaidTeamSummary {
   const memberById = new Map(members.map((member) => [member.id, member]));
   const team: Member[] = [];
   const roleCounts: Record<Role, number> = { 坦克: 0, 治疗: 0, 输出: 0 };
   let auraTotal = 0;
-  for (const [index, squad] of squads.entries()) {
+  const raiding = squads.slice(0, Math.round(size / 5));
+  for (const [index, squad] of raiding.entries()) {
     const squadMembers = squad.memberIds
       .map((id) => memberById.get(id))
       .filter((member): member is Member => member !== undefined);
@@ -118,13 +138,13 @@ export function raidTeam(
   const teamItemLevel =
     team.length === 0
       ? 0
-      : team.reduce((sum, member) => sum + averageItemLevel(member), 0) / team.length;
+      : team.reduce((sum, member) => sum + effectiveItemLevel(member), 0) / team.length;
   return {
     members: team,
     teamSize: team.length,
     averageItemLevel: teamItemLevel,
     roleCounts,
-    auraBonusPercent: squads.length === 0 ? 0 : auraTotal / squads.length,
+    auraBonusPercent: raiding.length === 0 ? 0 : auraTotal / raiding.length,
   };
 }
 
@@ -367,8 +387,9 @@ export function settleRaidNight(params: SettleRaidNightParams): SettleRaidNightR
     return { members: params.members, vault, economy: params.economy, renownPoints: params.renownPoints, rngState: params.rngState };
   }
 
-  // 开团复核②:团队检查(开团后淘汰/调离导致阵容不齐则取消,不算团灭)
-  const check = teamCheckOf(params.members, squads);
+  // 开团复核②:团队检查(按团本规模折算:20 人本 = 前 4 支满员小队;
+  // 开团后淘汰/调离导致阵容不齐则取消,不算团灭)
+  const check = teamCheckOf(params.members, squads, raid.size);
   if (!check.passed) {
     emit(
       `团本夜取消:团队检查未通过(${check.failures.map((f) => f.text).join('、')}),补齐编成后下周再战。`,
@@ -379,7 +400,9 @@ export function settleRaidNight(params: SettleRaidNightParams): SettleRaidNightR
     return { members: params.members, vault, economy: params.economy, renownPoints: params.renownPoints, rngState: params.rngState };
   }
 
-  // 现行分配制度(防御:状态里的制度 id 不在内容表时回落默认裁量)
+  // 现行分配制度(防御:状态里的制度 id 不在内容表时回落默认裁量);
+  // G团接单夜不走分配制度(掉落整批卖给买家),制度心态也不适用(打工性质)
+  const gRunNight = plan.mode === 'gRun' && raid.gRunAllowed === true;
   const system = LOOT_SYSTEM_BY_ID.get(params.economy.system) ?? LOOT_SYSTEM_BY_ID.get('chairman')!;
 
   let rngState = params.rngState;
@@ -389,15 +412,19 @@ export function settleRaidNight(params: SettleRaidNightParams): SettleRaidNightR
   let nightSelfDealt = 0;
   let reputationCostTotal = 0;
   let personalGoldOut = 0;
+  // G团接单的整夜累计(T18:卖出件数/金库抽成/每人打工费)
+  let gRunDropsSold = 0;
+  let gRunVaultGoldIn = 0;
+  let gRunGoldPerRaider = 0;
 
-  const team = raidTeam(members, squads);
+  const team = raidTeam(members, squads, raid.size);
   const teamIds = new Set(team.members.map((member) => member.id));
   /** 出战阵容的团员 id 顺序(分配时按当前名册重新解析,换装结果逐件可见)。 */
   const teamOrderIds = team.members.map((member) => member.id);
   const chancePercent = (value: number) => Math.round(value * 100);
 
   emit(
-    `团本夜开始:「${raid.name}」—— ${raid.bosses.length} 名首领按顺序结算,全团 ${team.teamSize} 人,平均装等 ${Math.round(team.averageItemLevel)}。`,
+    `团本夜开始:「${raid.name}」${gRunNight ? '(G团接单)' : ''}—— ${raid.bosses.length} 名首领按顺序结算,全团 ${team.teamSize} 人,平均装等 ${Math.round(team.averageItemLevel)}。`,
   );
 
   // 赛前决策生效宣告(T14):阵形与增益逐项可见;未及备妥的世界 Buff 点名作废
@@ -481,51 +508,90 @@ export function settleRaidNight(params: SettleRaidNightParams): SettleRaidNightR
       emit(
         `「${boss.name}」被击杀:战力 ${Math.round(assessment.power)} 对难度 ${assessment.target}(胜率 ${chancePercent(successChance)}%)${fallen > 0 ? `,${fallen} 人倒下又被拉起` : ''}。`,
       );
-      // DKP 制:击杀记分(先出勤记分,再花分拿装)
-      members = accrueDkpOnKill(members, teamIds, system);
+      // DKP 制:击杀记分(先出勤记分,再花分拿装);G团夜是打工,不记分
+      members = gRunNight ? members : accrueDkpOnKill(members, teamIds, system);
       // 功绩统计(T12):出席者参与击杀一名首领(名人堂「功绩」陈列)
       members = members.map((member) =>
         teamIds.has(member.id) ? { ...member, bossKills: member.bossKills + 1 } : member,
       );
 
-      // 胜利掉落 → 按现行分配制度归属(逐件结算,后一件看到前一件的结果)
+      // 胜利掉落 → G团夜整批卖给买家;公会团按现行分配制度归属
+      // (逐件结算,后一件看到前一件的结果;tier 套装绑定:紫装落在套装部位即套装件)
       const [dropped, afterDrops] = rollDropItems(
         rngState,
-        RAID_DROP_QUALITY,
+        raid.dropQuality ?? RAID_DROP_QUALITY,
         boss.dropItemLevel,
         boss.dropsPerKill,
         RAID_SETTLEMENT.dropJitter,
+        raid.set === undefined
+          ? undefined
+          : { id: raid.set.id, slots: raid.set.slots },
       );
       rngState = afterDrops;
       const outcomesOfDrop: DropOutcome[] = [];
-      for (const item of dropped) {
-        const lineup = teamOrderIds
-          .map((id) => members.find((member) => member.id === id))
-          .filter((member): member is Member => member !== undefined);
-        const allocation = distributeRaidDrop({
-          members,
-          team: lineup,
-          item,
-          system,
-          selfDealing: params.economy.selfDealing,
-          vault: currentVault,
-          salvageGoldPerDrop: params.goal?.salvageGoldPerDrop,
-          lootTilt: params.goal?.lootTilt,
-        });
-        members = allocation.members;
-        currentVault = allocation.vault;
-        nightSelfDealt += allocation.selfDealt ? 1 : 0;
-        reputationCostTotal += allocation.reputationCost;
-        personalGoldOut += allocation.outcome.goldPaid ?? 0;
-        outcomesOfDrop.push({
-          slot: item.slot,
-          quality: item.quality,
-          itemLevel: item.itemLevel,
-          system: system.id,
-          ...allocation.outcome,
-        });
-        if (allocation.line !== undefined) {
-          emit(allocation.line);
+      if (gRunNight) {
+        // G团接单(T18,GLOSSARY:G团):成交价 = 金库抽成 + 出战团员均分打工费
+        let pot = 0;
+        for (const item of dropped) {
+          pot += G_RUN.priceByQuality[item.quality];
+          outcomesOfDrop.push({
+            slot: item.slot,
+            quality: item.quality,
+            itemLevel: item.itemLevel,
+            equipped: false,
+            soldGold: G_RUN.priceByQuality[item.quality],
+            ...(item.setId !== undefined ? { setId: item.setId } : {}),
+          });
+        }
+        const vaultCut = Math.floor((pot * G_RUN.vaultCutPercent) / 100);
+        const share = Math.floor((pot - vaultCut) / team.teamSize);
+        const leftover = pot - vaultCut - share * team.teamSize;
+        const vaultGain = vaultCut + leftover;
+        currentVault = {
+          gold: currentVault.gold + vaultGain,
+          repairSpent: currentVault.repairSpent,
+          incomeTotal: currentVault.incomeTotal + vaultGain,
+        };
+        members = members.map((member) =>
+          teamIds.has(member.id) ? { ...member, personalGold: member.personalGold + share } : member,
+        );
+        gRunDropsSold += dropped.length;
+        gRunVaultGoldIn += vaultGain;
+        gRunGoldPerRaider += share;
+        emit(
+          `G团成交:本首领掉落 ${dropped.length} 件合计 ${pot} 金 —— 金库 +${vaultGain}(抽成),打工者每人 +${share} 金。`,
+        );
+      } else {
+        for (const item of dropped) {
+          const lineup = teamOrderIds
+            .map((id) => members.find((member) => member.id === id))
+            .filter((member): member is Member => member !== undefined);
+          const allocation = distributeRaidDrop({
+            members,
+            team: lineup,
+            item,
+            system,
+            selfDealing: params.economy.selfDealing,
+            vault: currentVault,
+            salvageGoldPerDrop: params.goal?.salvageGoldPerDrop,
+            lootTilt: params.goal?.lootTilt,
+          });
+          members = allocation.members;
+          currentVault = allocation.vault;
+          nightSelfDealt += allocation.selfDealt ? 1 : 0;
+          reputationCostTotal += allocation.reputationCost;
+          personalGoldOut += allocation.outcome.goldPaid ?? 0;
+          outcomesOfDrop.push({
+            slot: item.slot,
+            quality: item.quality,
+            itemLevel: item.itemLevel,
+            system: system.id,
+            ...(item.setId !== undefined ? { setId: item.setId } : {}),
+            ...allocation.outcome,
+          });
+          if (allocation.line !== undefined) {
+            emit(allocation.line);
+          }
         }
       }
       drops = outcomesOfDrop;
@@ -609,19 +675,26 @@ export function settleRaidNight(params: SettleRaidNightParams): SettleRaidNightR
     );
   }
 
-  // 夜末制度心态(出席团员;会长角色的忠诚不随制度波动)+ 分配小结
-  members = applyLootSystemNightEffects(members, teamIds, system);
+  // 夜末制度心态(出席团员;会长角色的忠诚不随制度波动)+ 分配小结;
+  // G团接单夜是打工性质:不走分配制度、不记制度心态,改记打工结算小结
   const vaultGoldIn = currentVault.incomeTotal - vault.incomeTotal;
   const signed = (value: number) => (value >= 0 ? `+${value}` : `${value}`);
-  const moodPart = system.attendeeMoodPerNight === 0 ? '心情不变' : `心情 ${signed(system.attendeeMoodPerNight)}`;
-  const loyaltyPart =
-    system.attendeeLoyaltyPerNight === 0
-      ? '忠诚不变'
-      : `出席者忠诚 ${signed(system.attendeeLoyaltyPerNight)}`;
-  const goldPart = vaultGoldIn > 0 ? `金库入账 ${vaultGoldIn} 金、全团分红` : '金币未流动';
-  emit(`本夜分配:「${system.name}」—— ${[loyaltyPart, moodPart, goldPart].join('、')}。`);
-  if (nightSelfDealt > 0) {
-    emit(`自肥 ${nightSelfDealt} 件:出席者忠诚逐件受损,声望 −${reputationCostTotal}(代价累积可见)。`);
+  if (gRunNight) {
+    emit(
+      `本夜 G团结算:共卖出 ${gRunDropsSold} 件,金库入账 ${gRunVaultGoldIn} 金,每名打工者 +${gRunGoldPerRaider} 金(打工费入个人金)。`,
+    );
+  } else {
+    members = applyLootSystemNightEffects(members, teamIds, system);
+    const moodPart = system.attendeeMoodPerNight === 0 ? '心情不变' : `心情 ${signed(system.attendeeMoodPerNight)}`;
+    const loyaltyPart =
+      system.attendeeLoyaltyPerNight === 0
+        ? '忠诚不变'
+        : `出席者忠诚 ${signed(system.attendeeLoyaltyPerNight)}`;
+    const goldPart = vaultGoldIn > 0 ? `金库入账 ${vaultGoldIn} 金、全团分红` : '金币未流动';
+    emit(`本夜分配:「${system.name}」—— ${[loyaltyPart, moodPart, goldPart].join('、')}。`);
+    if (nightSelfDealt > 0) {
+      emit(`自肥 ${nightSelfDealt} 件:出席者忠诚逐件受损,声望 −${reputationCostTotal}(代价累积可见)。`);
+    }
   }
 
   // 当周目标的心态钩子(T15,计划层):在制度心态之上叠加(钳制 0-100;
@@ -654,6 +727,7 @@ export function settleRaidNight(params: SettleRaidNightParams): SettleRaidNightR
     raidId: raid.id,
     raidName: raid.name,
     atGameMinutes,
+    size: raid.size,
     lineup: team.members.map((member, indexInTeam) => ({
       squadOrdinal: Math.floor(indexInTeam / 5) + 1,
       name: member.name,
@@ -674,14 +748,23 @@ export function settleRaidNight(params: SettleRaidNightParams): SettleRaidNightR
       : undefined,
     repairGold: repairGoldTotal,
     goal: goal !== undefined ? { id: goal.id, name: goal.name } : undefined,
-    loot: {
-      system: system.id,
-      vaultGoldIn,
-      personalGoldOut,
-      selfDealtCount: nightSelfDealt,
-      attendeeLoyaltyPerNight: system.attendeeLoyaltyPerNight,
-      attendeeMoodPerNight: system.attendeeMoodPerNight,
-    },
+    loot: gRunNight
+      ? undefined
+      : {
+          system: system.id,
+          vaultGoldIn,
+          personalGoldOut,
+          selfDealtCount: nightSelfDealt,
+          attendeeLoyaltyPerNight: system.attendeeLoyaltyPerNight,
+          attendeeMoodPerNight: system.attendeeMoodPerNight,
+        },
+    gRun: gRunNight
+      ? {
+          dropsSold: gRunDropsSold,
+          vaultGoldIn: gRunVaultGoldIn,
+          goldPerRaider: gRunGoldPerRaider,
+        }
+      : undefined,
     tactics: tactics.any
       ? {
           stance: { id: tactics.stanceId, name: tactics.stanceName },
