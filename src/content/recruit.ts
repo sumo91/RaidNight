@@ -2,45 +2,40 @@
  * 招募配置(数据驱动内容):申请池规格与名册上限。
  *
  * 规则逻辑在 src/sim/recruit.ts;一切可调数值都在这里,调优不动模拟代码。
- * 申请池「依据声望每日刷新」(GLOSSARY):数量与质量均由声望驱动;
- * 本票声望为桩值(stubReputation,T12 接声望系统真值)。
+ * 申请池「依据声望每日刷新」(GLOSSARY):数量与质量均由声望阶位(rung,
+ * 0..21,7 档 × 3 星,见 content/reputation.ts)驱动 —— T12 起为真值,
+ * 不再有桩值(T3 时代的 stubReputation 已移除)。
  */
 
 import type { Range } from './roster-gen';
 
 export interface RecruitConfig {
   /**
-   * 桩值声望(0-100):新建公会是无名小会,从 0 起步;
-   * T12 由声望系统(7 档 × 3 星)驱动真值,本票只作为池子规格的输入。
-   */
-  readonly stubReputation: number;
-  /** 声望刻度上限(0-100)。 */
-  readonly reputationMax: number;
-  /**
    * 名册起步上限:会长角色 + 5 名初始团员 = 6 人小会。
-   * (GLOSSARY:名册上限随声望与大厅成长;扩容联动在 T12。)
+   * GLOSSARY:名册上限随声望与大厅成长;声望侧联动 = content/reputation 的
+   * 档位加成(sim/reputation.rosterCapForRung),大厅建设属后续工单。
    */
   readonly baseRosterCap: number;
-  /** 申请池数量参数。 */
+  /** 申请池数量参数(阶位驱动)。 */
   readonly poolCount: {
-    /** 基础份数(声望为 0 时每日的申请数)。 */
+    /** 基础份数(0 阶「无名小会」时每日的申请数)。 */
     readonly baseCount: number;
     /** 份数上限。 */
     readonly maxCount: number;
-    /** 每 countBonusPerReputation 点声望,每日申请 +1 份。 */
-    readonly countBonusPerReputation: number;
+    /** 每升 rungsPerExtraApplicant 个阶位,每日申请 +1 份。 */
+    readonly rungsPerExtraApplicant: number;
   };
-  /** 申请池质量参数:声望越高,苗子等级越高、技艺越好。 */
+  /** 申请池质量参数:阶位越高,苗子等级越高、技艺越好。 */
   readonly poolQuality: {
     /** 申请人等级基础区间(与建会名册同级;随版本进度联动见后续工单)。 */
     readonly baseLevelRange: Range;
-    /** 每 levelBonusPerReputation 点声望,等级区间整体上移 1 级。 */
-    readonly levelBonusPerReputation: number;
+    /** 每升 rungsPerLevelBonus 个阶位,等级区间整体上移 1 级。 */
+    readonly rungsPerLevelBonus: number;
     /** 等级上移上限(防止早期声望涌入拉爆等级曲线)。 */
     readonly levelBonusCap: number;
     /**
-     * 技艺档偏置(乘数,声望满值时生效):
-     * 实际权重 = 档位基础权重 × (1 + 声望比例 × (偏置 - 1)),偏置 1 = 不变。
+     * 技艺档偏置(乘数,满阶 21 时生效):
+     * 实际权重 = 档位基础权重 × (1 + 阶位比例 × (偏置 - 1)),偏置 1 = 不变。
      * 高技艺档偏置 >1 更常见、低技艺档偏置 <1 更少见;线性插值保持确定性。
      */
     readonly skillTierBias: readonly { readonly tierId: string; readonly bias: number }[];
@@ -48,17 +43,15 @@ export interface RecruitConfig {
 }
 
 export const RECRUIT: RecruitConfig = {
-  stubReputation: 0,
-  reputationMax: 100,
   baseRosterCap: 6,
   poolCount: {
     baseCount: 3,
     maxCount: 8,
-    countBonusPerReputation: 20,
+    rungsPerExtraApplicant: 3,
   },
   poolQuality: {
     baseLevelRange: [8, 11],
-    levelBonusPerReputation: 25,
+    rungsPerLevelBonus: 4,
     levelBonusCap: 4,
     skillTierBias: [
       { tierId: 'top', bias: 3.0 },

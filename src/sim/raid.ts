@@ -115,8 +115,8 @@ export interface SettleRaidNightParams {
   readonly vault: GuildVault;
   /** 公会经济:现行分配制度与自肥开关(T11;掉落归属按此结算)。 */
   readonly economy: GuildEconomy;
-  /** 声望(桩值,T12 接真):自肥的声望代价从这里扣减。 */
-  readonly reputation: number;
+  /** 声望值(T12 真值):自肥的声望代价从这里扣减;首杀/里程碑加分由门面结算。 */
+  readonly renownPoints: number;
   readonly plan: RaidPlan;
   readonly rngState: number;
   /** 团本夜时刻(= 游戏周边界;报告与日志的时刻)。 */
@@ -129,8 +129,8 @@ export interface SettleRaidNightResult {
   readonly vault: GuildVault;
   /** 经济面回写:自肥件数与声望代价累积(T11)。 */
   readonly economy: GuildEconomy;
-  /** 声望回写(自肥代价扣减后,下限 0)。 */
-  readonly reputation: number;
+  /** 声望值回写(自肥代价扣减后,下限 0)。 */
+  readonly renownPoints: number;
   readonly rngState: number;
   /** 整夜结算的报告(直播视图数据);夜被取消(检查未过/内容失效)时为 undefined。 */
   readonly report?: RaidNightReport;
@@ -148,7 +148,7 @@ export function settleRaidNight(params: SettleRaidNightParams): SettleRaidNightR
   const raid = RAID_BY_ID.get(plan.raidId);
   if (raid === undefined) {
     emit(`团本安排失效:安排的团本已不在团本表中,本周不开团。`);
-    return { members: params.members, vault, economy: params.economy, reputation: params.reputation, rngState: params.rngState };
+    return { members: params.members, vault, economy: params.economy, renownPoints: params.renownPoints, rngState: params.rngState };
   }
 
   // 开团复核①:内容阶梯门槛(开团后名册回落则取消 —— 未达标不可进入)
@@ -158,7 +158,7 @@ export function settleRaidNight(params: SettleRaidNightParams): SettleRaidNightR
   });
   if (!unlock.unlocked) {
     emit(`团本夜取消:「${raid.name}」门槛未达(${unlock.unmet.join('、')}),本周不开团。`);
-    return { members: params.members, vault, economy: params.economy, reputation: params.reputation, rngState: params.rngState };
+    return { members: params.members, vault, economy: params.economy, renownPoints: params.renownPoints, rngState: params.rngState };
   }
 
   // 开团复核②:团队检查(开团后淘汰/调离导致阵容不齐则取消,不算团灭)
@@ -167,7 +167,7 @@ export function settleRaidNight(params: SettleRaidNightParams): SettleRaidNightR
     emit(
       `团本夜取消:团队检查未通过(${check.failures.map((f) => f.text).join('、')}),补齐编成后下周再战。`,
     );
-    return { members: params.members, vault, economy: params.economy, reputation: params.reputation, rngState: params.rngState };
+    return { members: params.members, vault, economy: params.economy, renownPoints: params.renownPoints, rngState: params.rngState };
   }
 
   // 现行分配制度(防御:状态里的制度 id 不在内容表时回落默认裁量)
@@ -241,6 +241,10 @@ export function settleRaidNight(params: SettleRaidNightParams): SettleRaidNightR
       );
       // DKP 制:击杀记分(先出勤记分,再花分拿装)
       members = accrueDkpOnKill(members, teamIds, system);
+      // 功绩统计(T12):出席者参与击杀一名首领(名人堂「功绩」陈列)
+      members = members.map((member) =>
+        teamIds.has(member.id) ? { ...member, bossKills: member.bossKills + 1 } : member,
+      );
 
       // 胜利掉落 → 按现行分配制度归属(逐件结算,后一件看到前一件的结果)
       const [dropped, afterDrops] = rollDropItems(
@@ -417,7 +421,7 @@ export function settleRaidNight(params: SettleRaidNightParams): SettleRaidNightR
       selfDealtCount: params.economy.selfDealtCount + nightSelfDealt,
       selfDealReputationPaid: params.economy.selfDealReputationPaid + reputationCostTotal,
     },
-    reputation: Math.max(0, params.reputation - reputationCostTotal),
+    renownPoints: Math.max(0, params.renownPoints - reputationCostTotal),
     rngState,
     report,
   };

@@ -13,6 +13,19 @@ import { evaluateUnlockGates } from './ladder';
 import { teamCheck } from './comp';
 import { guildAverageItemLevel, guildAverageLevel } from './roster';
 import { settleLevelingDay, squadLevelingMap } from './leveling';
+import {
+  accrueBenchDays,
+  autoResignations,
+  evaluateMilestones,
+  firstKillsFromRaidNight,
+  hallDeedsLine,
+  hallEntryFor,
+  rareDropsFromRaidNight,
+  renownLabel,
+  renownRung,
+  renownStanding,
+  rosterCapForRung,
+} from './reputation';
 import { settleRaidNight } from './raid';
 import { generateApplicantPool } from './recruit';
 import { pickOne } from './rng';
@@ -22,6 +35,8 @@ import {
   type GameState,
   type GuildEconomy,
   type Member,
+  type RaidNightReport,
+  type RareDropRecord,
   type Squad,
 } from './state';
 
@@ -113,7 +128,13 @@ function applyCommand(state: GameState, command: GuildCommand, collector: EventC
       if (state.members.length >= state.rosterCap) {
         return state; // 名册已满:不可再招(验收标准 3)
       }
-      const member: Member = { id: state.nextMemberId, isChairman: false, ...applicant.profile };
+      const member: Member = {
+        id: state.nextMemberId,
+        isChairman: false,
+        joinedAtGameMinutes: state.clockGameMinutes,
+        benchDays: 0,
+        ...applicant.profile,
+      };
       collector.push(state.clockGameMinutes, '招募', `「${member.name}」通过申请,正式入册。`);
       return {
         ...state,
@@ -139,11 +160,14 @@ function applyCommand(state: GameState, command: GuildCommand, collector: EventC
         return state; // 团员不存在或为会长角色:忽略(会长不能淘汰自己)
       }
       collector.push(state.clockGameMinutes, '招募', `「${member.name}」被淘汰出会。`);
+      // 离会即入名人堂(GLOSSARY:含已离会者的去向与功绩;台词/去向按团员 id 确定)
+      const entry = hallEntryFor(member, '会长淘汰', state.clockGameMinutes);
       return {
         ...state,
         members: state.members.filter((m) => m.id !== command.memberId),
         // 淘汰同时清编:人走队清,小队不悬挂已离会团员
         squads: removeFromSquads(state.squads, command.memberId),
+        hallOfFame: [...state.hallOfFame, entry],
       };
     }
     case 'createSquad': {
@@ -467,18 +491,24 @@ function advanceClock(state: GameState, delta: number, collector: EventCollector
   let cursor = state.clockGameMinutes;
   let rngState = state.rngState;
   let members = state.members;
+  let squads = state.squads;
   let applicants = state.applicants;
   let nextApplicationId = state.nextApplicationId;
   let lastDungeonRun = state.lastDungeonRun;
   let vault = state.vault;
   let economy = state.economy;
-  let reputation = state.reputation;
+  let renownPoints = state.renownPoints;
   let raidPlan = state.raidPlan;
   let lastRaidNight = state.lastRaidNight;
+  let honorWall = state.honorWall;
+  let hallOfFame = state.hallOfFame;
+  let rosterCap = state.rosterCap;
 
   // 逐个跨越的边界结算;游戏周边界必是游戏日边界(分钟数整除)。
   // 日界结算顺序固定:日更文案 → 申请池刷新 → 练级/休整 → 下本结算 → 外快结算(自动层)
-  // →(周界)团本夜整夜结算 → 周更(团本 CD 重置)。
+  // →(周界)团本夜整夜结算 → 周更(团本 CD 重置)
+  // → 声望与荣誉(T12 尾声,确定性不消费随机链):冷板凳计数 → 稀有入墙 → 首杀
+  //   → 里程碑 → 阶位/名册上限 → 自动退会。
   for (;;) {
     const nextDayAt = (Math.floor(cursor / GAME_MINUTES_PER_DAY) + 1) * GAME_MINUTES_PER_DAY;
     const nextWeekAt = (Math.floor(cursor / GAME_MINUTES_PER_WEEK) + 1) * GAME_MINUTES_PER_WEEK;
@@ -487,27 +517,29 @@ function advanceClock(state: GameState, delta: number, collector: EventCollector
       break;
     }
     cursor = nextAt;
+    let tonightReport: RaidNightReport | undefined;
 
     const [flavor, afterFlavor] = pickOne(rngState, DAILY_FLAVOR_POOL);
     rngState = afterFlavor;
     collector.push(nextAt, '日更', `第 ${gameDay(nextAt)} 天:${flavor}`);
 
-    // 申请池每日刷新:未处理的申请全部作废,按当日声望规格重生成(GLOSSARY:申请池)
-    const pool = generateApplicantPool(rngState, state.reputation, members, nextApplicationId);
+    // 申请池每日刷新:未处理的申请全部作废,按当日声望阶位规格重生成
+    // (GLOSSARY:申请池依据声望每日刷新;阶位 = 档序 × 3 + 星,T12 真值)
+    const pool = generateApplicantPool(rngState, renownRung(renownPoints), members, nextApplicationId);
     rngState = pool.rngState;
     applicants = pool.applicants;
     nextApplicationId = pool.nextApplicationId;
     collector.push(nextAt, '招募', `申请池刷新:${applicants.length} 名冒险者递来了申请。`);
 
     // 练级结算(自动层,静默计数):进驻地图的队员成长与积劳,其余无安排者休整
-    const day = settleLevelingDay(members, state.squads, rngState);
+    const day = settleLevelingDay(members, squads, rngState);
     members = day.members;
     rngState = day.rngState;
 
     // 下本结算(自动层,结果卡 + 短日志):进驻 5 人本的小队逐次结算、掉落择优穿戴
     const dungeonDay = settleDungeonDay({
       members,
-      squads: state.squads,
+      squads,
       rngState,
       atGameMinutes: nextAt,
       emit: (text) => collector.push(nextAt, '下本', text),
@@ -519,7 +551,7 @@ function advanceClock(state: GameState, delta: number, collector: EventCollector
     // 外快结算(自动层,短日志):打工/野团小队的个人金收入(GLOSSARY:个人金)
     const externalDay = settleExternalDay({
       members,
-      squads: state.squads,
+      squads,
       atGameMinutes: nextAt,
       emit: (text) => collector.push(nextAt, '经济', text),
     });
@@ -531,10 +563,10 @@ function advanceClock(state: GameState, delta: number, collector: EventCollector
       if (raidPlan !== undefined) {
         const raidNight = settleRaidNight({
           members,
-          squads: state.squads,
+          squads,
           vault,
           economy,
-          reputation,
+          renownPoints,
           plan: raidPlan,
           rngState,
           atGameMinutes: nextAt,
@@ -543,12 +575,121 @@ function advanceClock(state: GameState, delta: number, collector: EventCollector
         members = raidNight.members;
         vault = raidNight.vault;
         economy = raidNight.economy;
-        reputation = raidNight.reputation;
+        renownPoints = raidNight.renownPoints;
         rngState = raidNight.rngState;
         lastRaidNight = raidNight.report ?? lastRaidNight;
         raidPlan = undefined;
+        tonightReport = raidNight.report;
       }
       collector.push(nextAt, '周更', `第 ${gameWeek(nextAt)} 周开始,团本 CD 已重置。`);
+    }
+
+    // ———— 声望与荣誉(T12;GLOSSARY:声望等级/荣誉墙/名人堂)————
+
+    // 冷板凳计数:已有小队的公会里,未编入任何小队的团员待命日数 +1(编入即清零)
+    members = accrueBenchDays(members, squads);
+
+    // 稀有陈列:今日穿上的紫装(5 人本 + 团本夜)逐件入墙,事件可追溯
+    const rareRecords: readonly RareDropRecord[] = [
+      ...dungeonDay.rareDrops
+        .filter((entry) => entry.outcome.equipped)
+        .map((entry) => ({
+          slot: entry.outcome.slot,
+          quality: entry.outcome.quality,
+          itemLevel: entry.outcome.itemLevel,
+          holder: entry.outcome.assignedTo ?? '?',
+          source: entry.source,
+          atGameMinutes: nextAt,
+        })),
+      ...(tonightReport !== undefined ? rareDropsFromRaidNight(tonightReport) : []),
+    ];
+    if (rareRecords.length > 0) {
+      honorWall = { ...honorWall, rareDrops: [...honorWall.rareDrops, ...rareRecords] };
+      for (const record of rareRecords) {
+        collector.push(
+          nextAt,
+          '声望',
+          `稀有入墙:${record.quality}·${record.slot}(装等 ${record.itemLevel})→ ${record.holder}(${record.source})。`,
+        );
+      }
+    }
+
+    const rungBefore = renownRung(renownPoints);
+
+    // 首杀(GLOSSARY:本会首次击杀某团本首领):徽章入墙(带日期)+ 声望加分
+    if (tonightReport !== undefined) {
+      const firstKills = firstKillsFromRaidNight(tonightReport, honorWall);
+      if (firstKills.badges.length > 0) {
+        honorWall = { ...honorWall, firstKills: [...honorWall.firstKills, ...firstKills.badges] };
+        renownPoints += firstKills.points;
+        const perKill = firstKills.points / firstKills.badges.length;
+        for (const badge of firstKills.badges) {
+          collector.push(
+            nextAt,
+            '声望',
+            `首杀!「${badge.bossName}」(${badge.raidName})首次倒在本会刀下 —— 声望 +${perKill}。`,
+          );
+        }
+      }
+    }
+
+    // 里程碑:状态刻度 + 当日信号;新达成者入墙 + 加分(同一里程碑只达成一次)
+    const milestones = evaluateMilestones({
+      members,
+      vaultIncomeTotal: vault.incomeTotal,
+      signals: {
+        dungeonClearedToday: dungeonDay.clearedToday,
+        raidClearedTonight: tonightReport?.cleared === true,
+        purpleEquippedToday: rareRecords.length > 0,
+      },
+      earnedMilestoneIds: honorWall.milestones.map((record) => record.milestoneId),
+    });
+    if (milestones.length > 0) {
+      honorWall = {
+        ...honorWall,
+        milestones: [
+          ...honorWall.milestones,
+          ...milestones.map((def) => ({ milestoneId: def.id, name: def.name, atGameMinutes: nextAt })),
+        ],
+      };
+      for (const def of milestones) {
+        renownPoints += def.points;
+        collector.push(
+          nextAt,
+          '声望',
+          `里程碑达成:「${def.name}」—— ${def.description}。声望 +${def.points}。`,
+        );
+      }
+    }
+
+    // 阶位提升:档位与星级可见;跨档时名册上限随之扩容(只升不降),档位解锁挖角一并公告
+    const rungAfter = renownRung(renownPoints);
+    if (rungAfter > rungBefore) {
+      const beforeTier = renownStanding(rungBefore).tier;
+      const afterStanding = renownStanding(rungAfter);
+      const capAfter = rosterCapForRung(rungAfter);
+      const parts = [`声望提升:${renownLabel(rungAfter)}(声望值 ${renownPoints})`];
+      if (capAfter > rosterCap) {
+        rosterCap = capAfter;
+        parts.push(`名册上限扩至 ${rosterCap} 人`);
+      }
+      if (afterStanding.tier.poachUnlocked && !beforeTier.poachUnlocked) {
+        parts.push('解锁挖角(可对背景公会出手)');
+      }
+      collector.push(nextAt, '声望', `${parts.join(',')}。`);
+    }
+
+    // 自动退会(DESIGN:忠诚过低或长期冷板凳):留台词与去向,入名人堂,除名清编
+    for (const resignation of autoResignations(members)) {
+      const entry = hallEntryFor(resignation.member, resignation.reason, nextAt);
+      hallOfFame = [...hallOfFame, entry];
+      members = members.filter((member) => member.id !== resignation.member.id);
+      squads = removeFromSquads(squads, resignation.member.id);
+      collector.push(
+        nextAt,
+        '退会',
+        `「${resignation.member.name}」自动退会(${resignation.reason}):「${entry.farewell}」—— ${entry.destination}。功绩:${hallDeedsLine(entry)}。`,
+      );
     }
   }
 
@@ -557,14 +698,18 @@ function advanceClock(state: GameState, delta: number, collector: EventCollector
     clockGameMinutes: target,
     rngState,
     members,
+    squads,
     applicants,
     nextApplicationId,
     lastDungeonRun,
     vault,
     economy,
-    reputation,
+    renownPoints,
     raidPlan,
     lastRaidNight,
+    honorWall,
+    hallOfFame,
+    rosterCap,
   };
 }
 

@@ -7,6 +7,7 @@ import {
 } from '../content/economy';
 import { GEAR_SLOTS } from '../content/gear';
 import { RAID_BY_ID, RAID_SETTLEMENT, type RaidDef } from '../content/raids';
+import { MILESTONES, RENOWN_SOURCES } from '../content/reputation';
 import { GAME_MINUTES_PER_DAY, GAME_MINUTES_PER_WEEK } from './clock';
 import { SimulationFacade, decodeSave, encodeSave, step } from './facade';
 import type { GameState, GearItem, Member, RaidNightReport, Squad } from './state';
@@ -49,6 +50,8 @@ function synthMember(
   return {
     id,
     isChairman: options?.isChairman ?? false,
+    joinedAtGameMinutes: 0,
+    benchDays: 0,
     name: options?.name ?? `合成团员${id}`,
     classId,
     specId,
@@ -63,6 +66,8 @@ function synthMember(
     attendance: { styleId: 'iron', baseRate: 95 },
     traits: [],
     skillTierId: 'skilled',
+    bossKills: 0,
+    rareLootWon: 0,
   };
 }
 
@@ -93,7 +98,7 @@ function econRaidState(
     system?: LootSystemId;
     selfDealing?: boolean;
     vaultGold?: number;
-    reputation?: number;
+    renownPoints?: number;
   },
 ): GameState {
   const base = new SimulationFacade(options?.seed ?? SEED, '经济测试公会').state;
@@ -141,7 +146,7 @@ function econRaidState(
       selfDealtCount: 0,
       selfDealReputationPaid: 0,
     },
-    reputation: options?.reputation ?? 50,
+    renownPoints: options?.renownPoints ?? 50,
     raidPlan: { raidId: RAID.id, openedAtGameMinutes: GAME_MINUTES_PER_WEEK - 120 },
   };
 }
@@ -441,9 +446,20 @@ describe('自肥:决策可执行、代价累积可见(验收标准 4)', () => {
       selfDealing: true,
       chairmanInTeam: true,
       chairmanItemLevel: 60,
-      reputation: 50,
+      renownPoints: 50,
     });
   }
+
+  /**
+   * 独立重算:当前状态因公会成就赚得的声望(T12 起声望为真值,自肥扣减之外
+   * 还有首杀/里程碑加分;只用内容常量,不复用结算实现的代码路径)。
+   */
+  const earnedRenownOf = (state: GameState): number =>
+    state.honorWall.firstKills.length * RENOWN_SOURCES.firstKillPointsByRaidTier[RAID.tier - 1]! +
+    state.honorWall.milestones.reduce(
+      (sum, record) => sum + (MILESTONES.find((def) => def.id === record.milestoneId)?.points ?? 0),
+      0,
+    );
 
   it('开启自肥:掉落优先装进会长角色,每件付出忠诚与声望代价', () => {
     const { state, report, events } = runNight(selfDealState());
@@ -467,7 +483,7 @@ describe('自肥:决策可执行、代价累积可见(验收标准 4)', () => {
     expect(chairman.loyalty).toBe(80); // 合成夹具值;自肥付的是团员的账,会长角色忠诚不波动
     expect(state.economy.selfDealtCount).toBe(count);
     expect(state.economy.selfDealReputationPaid).toBe(DISCRETION.selfDealReputationCost! * count);
-    expect(state.reputation).toBe(50 - DISCRETION.selfDealReputationCost! * count);
+    expect(state.renownPoints).toBe(50 - DISCRETION.selfDealReputationCost! * count + earnedRenownOf(state));
     expect(events.some((text) => text.includes('自肥') && text.includes('代价累积可见'))).toBe(true);
   });
 
@@ -488,7 +504,7 @@ describe('自肥:决策可执行、代价累积可见(验收标准 4)', () => {
     // 累积可见:总件数 = 夜一夜二之和;声望代价与扣减后的声望同步累积
     expect(total).toBe(count1 + count2);
     expect(afterNight2.economy.selfDealReputationPaid).toBe(DISCRETION.selfDealReputationCost! * total);
-    expect(afterNight2.reputation).toBe(50 - DISCRETION.selfDealReputationCost! * total);
+    expect(afterNight2.renownPoints).toBe(50 - DISCRETION.selfDealReputationCost! * total + earnedRenownOf(afterNight2));
   });
 
   it('关闭自肥:掉落回到正常裁量,不再产生自肥代价', () => {
@@ -504,7 +520,7 @@ describe('自肥:决策可执行、代价累积可见(验收标准 4)', () => {
     const report = facade.state.lastRaidNight!;
     expect(report.bosses.flatMap((boss) => boss.drops).every((drop) => drop.selfDealt === undefined)).toBe(true);
     expect(facade.state.economy.selfDealtCount).toBe(count1); // 不再累积
-    expect(facade.state.reputation).toBe(50 - DISCRETION.selfDealReputationCost! * count1);
+    expect(facade.state.renownPoints).toBe(50 - DISCRETION.selfDealReputationCost! * count1 + earnedRenownOf(facade.state));
   });
 });
 

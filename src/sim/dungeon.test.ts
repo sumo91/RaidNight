@@ -41,6 +41,8 @@ function synthMember(
   return {
     id,
     isChairman: false,
+    joinedAtGameMinutes: 0,
+    benchDays: 0,
     name: options?.name ?? `合成团员${id}`,
     classId,
     specId,
@@ -55,6 +57,8 @@ function synthMember(
     attendance: { styleId: 'iron', baseRate: 95 },
     traits: [],
     skillTierId: 'skilled',
+    bossKills: 0,
+    rareLootWon: 0,
   };
 }
 

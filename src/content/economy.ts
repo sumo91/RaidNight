@@ -7,7 +7,7 @@
  * 分配权把装备分给自己的会长角色,累积忠诚与声望代价。
  * 规则逻辑在 src/sim/economy.ts(外快结算与团本掉落分配)与门面(换制裁决);
  * 此处只有数值与文案,调优不动模拟代码。
- * 声望在本票仍为桩值(T12 接声望系统真值),自肥的声望代价先记价、可累积。
+ * 自肥的声望代价自 T12 起从声望值实扣(content/reputation.ts 的声望系统)。
  */
 
 import type { DungeonUnlockGates } from './dungeons';
@@ -53,7 +53,7 @@ export interface LootSystemDef {
   readonly gkpVaultCutPercent?: number;
   /** 会长裁量:自肥开启时,每件自肥装备对每名出席团员(会长角色除外)的忠诚代价。 */
   readonly selfDealLoyaltyCost?: number;
-  /** 会长裁量:每件自肥装备的声望代价(声望为桩值,T12 接真值;代价先记价可累积)。 */
+  /** 会长裁量:每件自肥装备的声望代价(自 T12 起从声望值实扣,见 content/reputation)。 */
   readonly selfDealReputationCost?: number;
 }
 

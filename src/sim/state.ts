@@ -4,6 +4,7 @@ import { generateFoundingRoster } from './member-gen';
 import { generateApplicantPool } from './recruit';
 import { DEFAULT_LOOT_SYSTEM, VAULT, type LootSystemId } from '../content/economy';
 import { RECRUIT } from '../content/recruit';
+import type { DepartureReason } from '../content/reputation';
 import type { GearSlot, Quality } from '../content/gear';
 
 /**
@@ -35,6 +36,10 @@ export interface MemberProfile {
   readonly traits: readonly string[];
   /** 技艺评级档位 id */
   readonly skillTierId: string;
+  /** 功绩统计:参与击杀的团本首领数(名人堂「功绩」陈列;申请人转正自 0 起) */
+  readonly bossKills: number;
+  /** 功绩统计:穿上的紫装件数(名人堂「功绩」陈列) */
+  readonly rareLootWon: number;
 }
 
 /**
@@ -45,6 +50,10 @@ export interface Member extends MemberProfile {
   readonly id: number;
   /** 是否会长角色(会长在名册中的自有角色,GLOSSARY) */
   readonly isChairman: boolean;
+  /** 入册时刻(游戏分钟;名人堂「在会时长」与功绩陈列用;建会元老为 0) */
+  readonly joinedAtGameMinutes: number;
+  /** 连续待命(未编入任何小队)的游戏日数;编入即清零(自动退会条件之一,T12) */
+  readonly benchDays: number;
 }
 
 /**
@@ -163,7 +172,7 @@ export interface GuildEconomy {
   readonly selfDealing: boolean;
   /** 历史自肥件数(忠诚/声望代价随件累积,此处可见累计)。 */
   readonly selfDealtCount: number;
-  /** 历史自肥的声望代价累计(声望为桩值,T12 接真值;先记价可累积)。 */
+  /** 历史自肥的声望代价累计(逐件从声望值实扣,T12 起声望为真值)。 */
   readonly selfDealReputationPaid: number;
 }
 
@@ -268,6 +277,78 @@ export interface GuildInfo {
 }
 
 /**
+ * 首杀徽章(GLOSSARY:首杀 = 本会首次击杀某团本首领的荣誉记录,带日期陈列)。
+ * 虚拟服务器与全服首杀属后续工单,当前记本会首杀。
+ */
+export interface FirstKillBadge {
+  readonly raidId: string;
+  readonly raidName: string;
+  readonly bossId: string;
+  readonly bossName: string;
+  /** 达成时刻(游戏分钟;UI 换算为游戏历日期)。 */
+  readonly atGameMinutes: number;
+}
+
+/** 里程碑达成记录(荣誉墙「里程碑」陈列;条件与分值见 content/reputation)。 */
+export interface MilestoneRecord {
+  readonly milestoneId: string;
+  readonly name: string;
+  readonly atGameMinutes: number;
+}
+
+/** 稀有掉落陈列(荣誉墙「稀有陈列」:被穿上的紫装战利品)。 */
+export interface RareDropRecord {
+  readonly slot: GearSlot;
+  readonly quality: Quality;
+  readonly itemLevel: number;
+  /** 持有人(穿上者) */
+  readonly holder: string;
+  /** 来源文案(团本名或 5 人本名) */
+  readonly source: string;
+  readonly atGameMinutes: number;
+}
+
+/** 荣誉墙(GLOSSARY:首杀、成就与收藏的陈列界面):只增不减,随存档落盘。 */
+export interface HonorWall {
+  /** 首杀徽章(按达成顺序;同一首领只记一次) */
+  readonly firstKills: readonly FirstKillBadge[];
+  /** 里程碑(按达成顺序;同一里程碑只记一次) */
+  readonly milestones: readonly MilestoneRecord[];
+  /** 稀有陈列(按入墙顺序) */
+  readonly rareDrops: readonly RareDropRecord[];
+}
+
+/**
+ * 名人堂条目(GLOSSARY:名人堂 = 陈列历代团员含已离会者去向与功绩的板块)。
+ * 离会即入堂:会长淘汰与自动退会都留档;台词与去向按团员 id 确定性取用。
+ */
+export interface HallOfFameEntry {
+  readonly memberId: number;
+  readonly name: string;
+  readonly classId: string;
+  readonly specId: string;
+  /** 离会时的等级与装等快照 */
+  readonly level: number;
+  readonly itemLevel: number;
+  readonly joinedAtGameMinutes: number;
+  readonly leftAtGameMinutes: number;
+  /** 离会方式(content/reputation.DepartureReason) */
+  readonly reason: DepartureReason;
+  /** 离会台词(数据驱动文案池) */
+  readonly farewell: string;
+  /** 去向文案(数据驱动文案池) */
+  readonly destination: string;
+  /** 功绩统计快照:参与击杀的首领数 / 穿上的紫装件数 */
+  readonly bossKills: number;
+  readonly rareLootWon: number;
+}
+
+/** 空荣誉墙(建会初始与旧档迁移共用)。 */
+export function createEmptyHonorWall(): HonorWall {
+  return { firstKills: [], milestones: [], rareDrops: [] };
+}
+
+/**
  * 游戏状态:门面的状态部分,纯数据、可序列化。
  * 确定性的关键:种子与随机链状态(rngState)都在状态内。
  */
@@ -280,11 +361,12 @@ export interface GameState {
   readonly clockGameMinutes: number;
   readonly guild: GuildInfo;
   /**
-   * 声望(0-100):驱动申请池的数量与质量(GLOSSARY:声望等级)。
-   * 本票为桩值(T12 接声望系统真值),只读不涨。
+   * 声望值(T12,GLOSSARY:声望等级):首杀与里程碑加分、自肥扣分;
+   * 7 档 × 3 星的档位与星级由阈值表派生(sim/reputation.ts),
+   * 反向驱动申请池数量/质量与名册上限。
    */
-  readonly reputation: number;
-  /** 名册上限:自 6 人起步;扩容与声望联动在 T12。 */
+  readonly renownPoints: number;
+  /** 名册上限:自 6 人起步,随声望档位扩容(只升不降;大厅建设属后续工单)。 */
   readonly rosterCap: number;
   /** 名册:建会时生成(会长角色 + 初始团员),经招募/淘汰指令增减 */
   readonly members: readonly Member[];
@@ -308,6 +390,10 @@ export interface GameState {
   readonly raidPlan?: RaidPlan;
   /** 最近一次团本夜的结算报告(结构化;过程见事件日志的「团本」条目) */
   readonly lastRaidNight?: RaidNightReport;
+  /** 荣誉墙(T12):首杀徽章 / 里程碑 / 稀有陈列。 */
+  readonly honorWall: HonorWall;
+  /** 名人堂(T12):离会团员的去向与功绩(含会长淘汰,按离会顺序)。 */
+  readonly hallOfFame: readonly HallOfFameEntry[];
   /** 下一个事件序号 */
   readonly nextEventSeq: number;
 }
@@ -323,14 +409,15 @@ export function createInitialState(seed: number, guildName?: string): GameState 
   const seed32 = seed | 0;
   const name = guildName === undefined ? DEFAULT_GUILD_NAME : normalizeGuildName(guildName);
   const roster = generateFoundingRoster(seed32);
-  // 建会当日就有申请池可浏览(每日刷新从下一个游戏日边界开始)
-  const pool = generateApplicantPool(roster.rngState, RECRUIT.stubReputation, roster.members, 1);
+  // 建会当日就有申请池可浏览(每日刷新从下一个游戏日边界开始);
+  // 新会声望 0 点 = 0 阶(无名小会),申请池规格由阶位驱动
+  const pool = generateApplicantPool(roster.rngState, 0, roster.members, 1);
   return {
     seed: seed32,
     rngState: pool.rngState,
     clockGameMinutes: 0,
     guild: { name: name ?? DEFAULT_GUILD_NAME },
-    reputation: RECRUIT.stubReputation,
+    renownPoints: 0,
     rosterCap: RECRUIT.baseRosterCap,
     members: roster.members,
     nextMemberId: roster.nextMemberId,
@@ -343,6 +430,8 @@ export function createInitialState(seed: number, guildName?: string): GameState 
     economy: createInitialEconomy(0),
     raidPlan: undefined,
     lastRaidNight: undefined,
+    honorWall: createEmptyHonorWall(),
+    hallOfFame: [],
     nextEventSeq: 1,
   };
 }

@@ -50,6 +50,8 @@ function synthMember(
   return {
     id,
     isChairman: false,
+    joinedAtGameMinutes: 0,
+    benchDays: 0,
     name: `重载团员${id}`,
     classId: spec.classId,
     specId: spec.specId,
@@ -64,6 +66,8 @@ function synthMember(
     attendance: { styleId: 'iron', baseRate: 95 },
     traits: [],
     skillTierId: 'skilled',
+    bossKills: 0,
+    rareLootWon: 0,
   };
 }
 

@@ -58,14 +58,17 @@ export interface GenerateProfileOptions {
   readonly skillTiers?: readonly SkillTierDef[];
 }
 
-/** 生成一名在册团员(id 由名册分配)。 */
+/** 生成一名在册团员(id 由名册分配;建会名册的入册时刻 = 建会 0 分钟)。 */
 function generateMember(
   rng: number,
   id: number,
   options: GenerateProfileOptions,
 ): [Member, number] {
   const [profile, nextState] = generateMemberProfile(rng, options);
-  return [{ id, isChairman: options.isChairman, ...profile }, nextState];
+  return [
+    { id, isChairman: options.isChairman, joinedAtGameMinutes: 0, benchDays: 0, ...profile },
+    nextState,
+  ];
 }
 
 /** 生成一份团员画像:在册团员与申请人共用。 */
@@ -144,6 +147,8 @@ export function generateMemberProfile(
       attendance,
       traits,
       skillTierId: tier.id,
+      bossKills: 0, // 功绩自 0 起累计(团本击杀参与,见 sim/raid.ts)
+      rareLootWon: 0, // 紫装战利品自 0 起累计(见 sim/dungeon.ts 的换装入口)
     },
     state,
   ];

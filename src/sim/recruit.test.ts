@@ -7,16 +7,23 @@ import { ROSTER_GEN } from '../content/roster-gen';
 import { SKILL_TIER_BY_ID } from '../content/skill-tiers';
 import { GAME_MINUTES_PER_DAY } from './clock';
 import { SimulationFacade, step } from './facade';
-import { poolSpecForReputation } from './recruit';
+import { poolSpecForRung } from './recruit';
+import { renownRung } from './reputation';
 import type { GameState, Member } from './state';
 
 /**
  * T3 门面测试:招募循环 —— 申请池 + 招募/淘汰。
  * 与全项目一致只打门面接缝:构造/驱动 SimulationFacade,断言状态快照与事件日志;
- * poolSpecForReputation 与 averageItemLevel 同为 sim 纯派生函数,按 T2 先例直接断言。
+ * poolSpecForRung 与 averageItemLevel 同为 sim 纯派生函数,按 T2 先例直接断言。
+ * T12 起声望为真值:规格由声望阶位(rung = 档序 × 3 + 星)驱动,不再有桩值。
  */
 
 const VALID_NAMES = new Set(FAMILY_NAME_POOL.flatMap((family) => GIVEN_NAME_POOL.map((given) => family + given)));
+
+/** 状态当前的声望阶位(派生量,sim/reputation 纯函数)。 */
+function rungOf(state: GameState): number {
+  return renownRung(state.renownPoints);
+}
 
 /** 取初始申请池中第 n 份申请的编号(1 起)。 */
 function applicationIdAt(state: GameState, n: number): number {
@@ -28,12 +35,13 @@ function applicationIdAt(state: GameState, n: number): number {
 }
 
 describe('申请池:建会初始池与规格(验收标准 1)', () => {
-  it('建会当日即有申请池:份数与规格由(桩值)声望驱动', () => {
+  it('建会当日即有申请池:份数与规格由声望阶位驱动(新会 = 0 阶)', () => {
     const facade = new SimulationFacade(20261018, '星盾公会');
     const state = facade.state;
-    expect(state.reputation).toBe(RECRUIT.stubReputation);
+    expect(state.renownPoints).toBe(0); // 新会声望从 0 起步(T12 真值)
+    expect(rungOf(state)).toBe(0);
     expect(state.rosterCap).toBe(RECRUIT.baseRosterCap);
-    const spec = poolSpecForReputation(state.reputation);
+    const spec = poolSpecForRung(rungOf(state));
     expect(state.applicants).toHaveLength(spec.count);
     // 申请编号独立空间:从 1 连续递增
     expect(state.applicants.map((a) => a.applicationId)).toEqual(
@@ -46,7 +54,7 @@ describe('申请池:建会初始池与规格(验收标准 1)', () => {
     // 多种子抽样:结构约束对任意池子成立
     for (let seed = 1; seed <= 25; seed++) {
       const state = new SimulationFacade(seed).state;
-      const spec = poolSpecForReputation(state.reputation);
+      const spec = poolSpecForRung(rungOf(state));
       const memberNames = new Set(state.members.map((m) => m.name));
       const batchNames = new Set<string>();
       for (const applicant of state.applicants) {
@@ -89,7 +97,7 @@ describe('申请池:每游戏日刷新(验收标准 1)', () => {
     const crossing = facade.dispatch({ deltaGameMinutes: 1 });
     expect(gameDayOf(crossing.state)).toBe(2);
     const refreshed = crossing.state.applicants;
-    expect(refreshed).toHaveLength(poolSpecForReputation(crossing.state.reputation).count);
+    expect(refreshed).toHaveLength(poolSpecForRung(rungOf(crossing.state)).count);
     const oldIds = new Set(day1.applicants.map((a) => a.applicationId));
     expect(refreshed.every((a) => !oldIds.has(a.applicationId))).toBe(true);
     expect(refreshed.map((a) => a.applicationId)).toEqual(
@@ -105,18 +113,18 @@ describe('申请池:每游戏日刷新(验收标准 1)', () => {
     const facade = new SimulationFacade(7, '星盾公会');
     const output = facade.dispatch({ deltaGameMinutes: GAME_MINUTES_PER_DAY * 7 });
     expect(output.events.filter((e) => e.kind === '招募')).toHaveLength(7);
-    expect(facade.state.applicants).toHaveLength(poolSpecForReputation(facade.state.reputation).count);
+    expect(facade.state.applicants).toHaveLength(poolSpecForRung(rungOf(facade.state)).count);
   });
 
   it('昨日未处理的申请次日不复存在(拒绝过的与剩下的都被新池覆盖)', () => {
     const facade = new SimulationFacade(11, '星盾公会');
     const rejectedId = applicationIdAt(facade.state, 1);
     facade.dispatch({ command: { type: 'rejectApplicant', applicationId: rejectedId }, deltaGameMinutes: 0 });
-    expect(facade.state.applicants).toHaveLength(poolSpecForReputation(facade.state.reputation).count - 1);
+    expect(facade.state.applicants).toHaveLength(poolSpecForRung(rungOf(facade.state)).count - 1);
 
     facade.dispatch({ deltaGameMinutes: GAME_MINUTES_PER_DAY });
     // 新池为满份数,且不含任何旧申请
-    expect(facade.state.applicants).toHaveLength(poolSpecForReputation(facade.state.reputation).count);
+    expect(facade.state.applicants).toHaveLength(poolSpecForRung(rungOf(facade.state)).count);
     expect(facade.state.applicants.some((a) => a.applicationId === rejectedId)).toBe(false);
   });
 });
@@ -138,7 +146,16 @@ describe('招募指令:招入/拒绝/淘汰均经门面(验收标准 2)', () => 
     const joined = output.state.members.at(-1) as Member;
     expect(joined.id).toBe(before.nextMemberId); // 团员 id 从 nextMemberId 起编
     expect(joined.isChairman).toBe(false);
-    expect({ ...joined, id: 0, isChairman: false }).toEqual({ ...applicant.profile, id: 0, isChairman: false }); // 画像原样转正
+    // 画像原样转正(入册时刻与冷板凳计数是转正新增的管理维度,T12)
+    expect({ ...joined, id: 0, isChairman: false, joinedAtGameMinutes: 0, benchDays: 0 }).toEqual({
+      ...applicant.profile,
+      id: 0,
+      isChairman: false,
+      joinedAtGameMinutes: 0,
+      benchDays: 0,
+    });
+    expect(joined.joinedAtGameMinutes).toBe(before.clockGameMinutes);
+    expect(joined.benchDays).toBe(0);
     expect(output.state.nextMemberId).toBe(before.nextMemberId + 1);
     expect(output.state.applicants).toHaveLength(before.applicants.length - 1);
     expect(output.state.applicants.some((a) => a.applicationId === applicant.applicationId)).toBe(false);
@@ -212,7 +229,7 @@ describe('名册上限:满员不可再招(验收标准 3)', () => {
 
     // 满员时拒绝照常生效(拒绝不是入册)
     facade.dispatch({ command: { type: 'rejectApplicant', applicationId: applicationIdAt(facade.state, 1) }, deltaGameMinutes: 0 });
-    expect(facade.state.applicants).toHaveLength(poolSpecForReputation(facade.state.reputation).count - 1);
+    expect(facade.state.applicants).toHaveLength(poolSpecForRung(rungOf(facade.state)).count - 1);
 
     // 淘汰一人 → 5/6,招入成功 → 6/6
     facade.dispatch({ command: { type: 'dismissMember', memberId: 3 }, deltaGameMinutes: 0 });
@@ -292,9 +309,9 @@ describe('招募循环:确定性(验收标准 4)', () => {
   });
 });
 
-describe('申请池规格:声望驱动(桩值输入,纯函数)', () => {
-  it('桩值声望(0):基础份数、基础等级区间、技艺档基础权重', () => {
-    const spec = poolSpecForReputation(0);
+describe('申请池规格:声望阶位驱动(纯函数,T12 真值)', () => {
+  it('0 阶(无名小会):基础份数、基础等级区间、技艺档基础权重', () => {
+    const spec = poolSpecForRung(0);
     expect(spec.count).toBe(RECRUIT.poolCount.baseCount);
     expect(spec.levelRange).toEqual([...RECRUIT.poolQuality.baseLevelRange]);
     for (const tier of spec.skillTiers) {
@@ -302,10 +319,10 @@ describe('申请池规格:声望驱动(桩值输入,纯函数)', () => {
     }
   });
 
-  it('声望升高:份数增多(有上限)、等级上移(有上限)、技艺向高档倾斜', () => {
-    const low = poolSpecForReputation(0);
-    const mid = poolSpecForReputation(50);
-    const high = poolSpecForReputation(100);
+  it('阶位升高:份数增多(有上限)、等级上移(有上限)、技艺向高档倾斜', () => {
+    const low = poolSpecForRung(0);
+    const mid = poolSpecForRung(10);
+    const high = poolSpecForRung(21); // 满阶 = 7 档 × 3 星
     expect(mid.count).toBeGreaterThan(low.count);
     expect(high.count).toBe(RECRUIT.poolCount.maxCount);
     expect(mid.levelRange[0]).toBeGreaterThan(low.levelRange[0]);
@@ -317,10 +334,10 @@ describe('申请池规格:声望驱动(桩值输入,纯函数)', () => {
     expect(rookieAt(high)).toBeLessThan(rookieAt(low));
   });
 
-  it('声望越界被钳制到 0-100,浮点向下取整', () => {
-    expect(poolSpecForReputation(-50)).toEqual(poolSpecForReputation(0));
-    expect(poolSpecForReputation(999)).toEqual(poolSpecForReputation(100));
-    expect(poolSpecForReputation(19.9).count).toBe(RECRUIT.poolCount.baseCount);
+  it('阶位越界被钳制到 0..21,浮点向下取整', () => {
+    expect(poolSpecForRung(-5)).toEqual(poolSpecForRung(0));
+    expect(poolSpecForRung(999)).toEqual(poolSpecForRung(21));
+    expect(poolSpecForRung(2.9).count).toBe(RECRUIT.poolCount.baseCount);
   });
 });
 

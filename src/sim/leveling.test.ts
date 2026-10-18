@@ -20,6 +20,8 @@ function synthMember(id: number, level: number, experience = 0, fatigue = 0): Me
   return {
     id,
     isChairman: false,
+    joinedAtGameMinutes: 0,
+    benchDays: 0,
     name: `合成团员${id}`,
     classId: 'warrior',
     specId: 'warrior-guard',
@@ -34,6 +36,8 @@ function synthMember(id: number, level: number, experience = 0, fatigue = 0): Me
     attendance: { styleId: 'iron', baseRate: 95 },
     traits: [],
     skillTierId: 'skilled',
+    bossKills: 0,
+    rareLootWon: 0,
   };
 }
 
@@ -273,8 +277,11 @@ describe('一日结算:固定时间跳变的成长与疲劳数值(验收标准 2
         const died = fatigueDelta > map.fatiguePerDay;
         expect(after).toEqual(expectedAfterLevelingDay(old, map, died));
       } else {
-        // 队外 1 人:休整,仅疲劳下降,其余维度分毫不动
-        expect({ ...after, fatigue: 0 }).toEqual({ ...old, fatigue: 0 });
+        // 队外 1 人:休整,仅疲劳下降;另有冷板凳计数 +1(T12,其余维度分毫不动)
+        const { benchDays: afterBench, ...afterRest } = after;
+        const { benchDays: oldBench, ...oldRest } = old;
+        expect({ ...afterRest, fatigue: 0 }).toEqual({ ...oldRest, fatigue: 0 });
+        expect(afterBench).toBe(oldBench + 1); // 公会已有小队:待命日数逐日累计
         expect(after.fatigue).toBe(Math.max(0, old.fatigue - LEVELING.restFatiguePerDay));
       }
     }
@@ -430,7 +437,11 @@ describe('休整与轮换(验收标准 2:疲劳恢复)', () => {
     for (const old of atStop) {
       const after = rested.state.members.find((m) => m.id === old.id)!;
       expect(after.fatigue).toBe(Math.max(0, old.fatigue - LEVELING.restFatiguePerDay));
-      expect({ ...after, fatigue: 0 }).toEqual({ ...old, fatigue: 0 }); // 休整只动疲劳
+      // 休整只动疲劳;冷板凳计数是唯一例外(T12:队外者逐日 +1,在队者保持 0)
+      const { benchDays: afterBench, ...afterRest } = after;
+      const { benchDays: oldBench, ...oldRest } = old;
+      expect({ ...afterRest, fatigue: 0 }).toEqual({ ...oldRest, fatigue: 0 });
+      expect(afterBench).toBe(oldBench + (old.id === 6 ? 1 : 0)); // 夹具:仅第 6 人在队外
     }
     // 再休整多日:疲劳最终归零
     facade.dispatch({ deltaGameMinutes: GAME_MINUTES_PER_DAY * 7 });

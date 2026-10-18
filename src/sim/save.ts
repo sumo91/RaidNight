@@ -9,7 +9,7 @@
  */
 
 import { VAULT } from '../content/economy';
-import { createInitialEconomy, type GameState } from './state';
+import { createEmptyHonorWall, createInitialEconomy, type GameState } from './state';
 
 /** 存档种类标记:v4 起写入封皮,导入时先验校验(不是本游戏的文件 → 拒绝)。 */
 export const SAVE_KIND = 'wowidle-save';
@@ -28,8 +28,12 @@ export const SAVE_KIND = 'wowidle-save';
  * - v7(T11):经济面 —— 团员新增个人金(personalGold)与 DKP(dkp),金库新增
  *   历史收入累计(incomeTotal),状态新增经济 economy(分配制度/自肥,旧档
  *   补建会默认:会长裁量制、不自肥);小队活动含外快(carry/wildRaid)。
+ * - v8(T12):声望与荣誉面 —— 状态新增声望值(renownPoints,替换 v7 的桩值
+ *   reputation 0-100 刻度,1:1 结转)、荣誉墙 honorWall(首杀/里程碑/稀有)
+ *   与名人堂 hallOfFame;团员新增功绩统计(bossKills/rareLootWon)、入册时刻
+ *   (joinedAtGameMinutes)与冷板凳计数(benchDays),旧档一律从 0 补。
  */
-export const SAVE_VERSION = 7;
+export const SAVE_VERSION = 8;
 
 /** 版本化存档封皮:v1–v3 的本机旧档没有 kind,读入时视为 legacy。 */
 export interface SaveFile {
@@ -81,6 +85,27 @@ const MIGRATIONS: Readonly<Record<number, Migration>> = {
         : { gold: VAULT.startingGold, repairSpent: 0, incomeTotal: 0 },
     economy: state.economy ?? createInitialEconomy(state.clockGameMinutes ?? 0),
   }),
+  // v7 → v8:补声望与荣誉面(功绩/入册时刻/冷板凳从 0 起;荣誉墙与名人堂为空;
+  // 旧声望是 T3 桩值刻度 —— 桩值只减不涨且建会为 0,真实 v7 档恒为 0,1:1 结转不亏)
+  7: (state) => {
+    const legacy = state as GameState & { reputation?: number };
+    const { reputation: _legacyReputation, ...rest } = legacy;
+    return {
+      ...rest,
+      renownPoints: Math.max(0, Math.round(_legacyReputation ?? 0)),
+      honorWall: state.honorWall ?? createEmptyHonorWall(),
+      hallOfFame: state.hallOfFame ?? [],
+      members: Array.isArray(state.members)
+        ? state.members.map((member) => ({
+            ...member,
+            bossKills: member.bossKills ?? 0,
+            rareLootWon: member.rareLootWon ?? 0,
+            joinedAtGameMinutes: member.joinedAtGameMinutes ?? 0,
+            benchDays: member.benchDays ?? 0,
+          }))
+        : state.members,
+    };
+  },
 };
 
 /** 编码:状态 → 存档文本(localStorage 值与导出文件内容共用)。 */
@@ -162,7 +187,13 @@ function looksLikeGameState(state: GameState): boolean {
     state.guild === null ||
     typeof state.guild.name !== 'string' ||
     typeof state.rosterCap !== 'number' ||
-    typeof state.reputation !== 'number' ||
+    typeof state.renownPoints !== 'number' ||
+    typeof state.honorWall !== 'object' ||
+    state.honorWall === null ||
+    !Array.isArray(state.honorWall.firstKills) ||
+    !Array.isArray(state.honorWall.milestones) ||
+    !Array.isArray(state.honorWall.rareDrops) ||
+    !Array.isArray(state.hallOfFame) ||
     typeof state.vault !== 'object' ||
     state.vault === null ||
     typeof state.vault.gold !== 'number' ||
@@ -188,6 +219,10 @@ function looksLikeGameState(state: GameState): boolean {
         typeof member.experience === 'number' &&
         typeof member.personalGold === 'number' &&
         typeof member.dkp === 'number' &&
+        typeof member.bossKills === 'number' &&
+        typeof member.rareLootWon === 'number' &&
+        typeof member.joinedAtGameMinutes === 'number' &&
+        typeof member.benchDays === 'number' &&
         Array.isArray(member.gear),
     ) &&
     state.squads.every((squad) => typeof squad.id === 'number' && Array.isArray(squad.memberIds)) &&

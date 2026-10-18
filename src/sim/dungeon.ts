@@ -157,7 +157,8 @@ export function bestWearer(
   return best as { member: Member; delta: number };
 }
 
-/** 换装:替换该部位装备(不可变:返回新 gear 数组;部位缺失时追加到末尾)。 */
+/** 换装:替换该部位装备(不可变:返回新 gear 数组;部位缺失时追加到末尾)。
+ * 紫装同时计入功绩统计 rareLootWon(名人堂陈列;T12)—— 全项目换装的唯一入口。 */
 export function equipItem(member: Member, item: DroppedItem): Member {
   const index = member.gear.findIndex((gear) => gear.slot === item.slot);
   const piece = { slot: item.slot, quality: item.quality, itemLevel: item.itemLevel };
@@ -165,7 +166,11 @@ export function equipItem(member: Member, item: DroppedItem): Member {
     index === -1
       ? [...member.gear, piece]
       : member.gear.map((gearItem, i) => (i === index ? piece : gearItem));
-  return { ...member, gear };
+  return {
+    ...member,
+    gear,
+    rareLootWon: member.rareLootWon + (item.quality === '紫' ? 1 : 0),
+  };
 }
 
 /** 逐日结算入参。emit 把短日志文本交回门面(带时刻与序号入事件流)。 */
@@ -178,11 +183,23 @@ export interface SettleDungeonDayParams {
   readonly emit: (text: string) => void;
 }
 
+/** 本日稀有掉落(紫装,含去向):荣誉墙「稀有陈列」与里程碑信号的数据面(T12)。 */
+export interface DayRareDrop {
+  /** 来源副本名 */
+  readonly source: string;
+  /** 掉落与去向(品质恒为「紫」) */
+  readonly outcome: DropOutcome;
+}
+
 export interface SettleDungeonDayResult {
   readonly members: readonly Member[];
   readonly rngState: number;
   /** 本日最后一次下本的结果卡数据(无任何下本时为 undefined) */
   readonly lastReport?: DungeonRunReport;
+  /** 本日全部速通中掷出的紫装掉落(逐件;无紫装或未下本为空数组,T12) */
+  readonly rareDrops: readonly DayRareDrop[];
+  /** 本日至少一次速通(「开荒开门红」里程碑的信号面;T12) */
+  readonly clearedToday: boolean;
 }
 
 /**
@@ -196,6 +213,8 @@ export function settleDungeonDay(params: SettleDungeonDayParams): SettleDungeonD
   let rngState = params.rngState;
   let members = params.members;
   let lastReport: DungeonRunReport | undefined;
+  const rareDrops: DayRareDrop[] = [];
+  let clearedToday = false;
 
   for (let squadIndex = 0; squadIndex < squads.length; squadIndex++) {
     const squad = squads[squadIndex]!;
@@ -246,6 +265,7 @@ export function settleDungeonDay(params: SettleDungeonDayParams): SettleDungeonD
       const chancePercent = Math.round(assessment.successChance * 100);
       let drops: readonly DropOutcome[] = [];
       if (success) {
+        clearedToday = true;
         // 胜利:掉落 → 择优穿戴(逐件结算,后一件看到前一件的换装结果)
         const [dropped, afterDrops] = rollDrops(rngState, def, def.dropsPerRun);
         rngState = afterDrops;
@@ -279,6 +299,12 @@ export function settleDungeonDay(params: SettleDungeonDayParams): SettleDungeonD
           }
         }
         drops = outcomes;
+        // 稀有掉落收集(T12):本日掷出的紫装逐件上交(入墙与否由门面按去向裁决)
+        rareDrops.push(
+          ...outcomes
+            .filter((outcome) => outcome.quality === '紫')
+            .map((outcome) => ({ source: def.name, outcome })),
+        );
       } else {
         emit(
           `「${def.name}」败退:战力 ${Math.round(assessment.power)} 对难度 ${assessment.target}(胜率 ${chancePercent}%),整队无功而返。`,
@@ -301,5 +327,5 @@ export function settleDungeonDay(params: SettleDungeonDayParams): SettleDungeonD
     }
   }
 
-  return { members, rngState, lastReport };
+  return { members, rngState, lastReport, rareDrops, clearedToday };
 }

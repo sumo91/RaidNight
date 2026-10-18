@@ -10,6 +10,7 @@ import {
 import type { Quality } from '../content/gear';
 import { LEVELING } from '../content/maps';
 import { RAID_BY_ID, RAID_SETTLEMENT } from '../content/raids';
+import { RENOWN_RUNG_COUNT, RENOWN_TIERS } from '../content/reputation';
 import { SKILL_TIER_BY_ID } from '../content/skill-tiers';
 import { TRAIT_BY_ID } from '../content/traits';
 import { GAME_MINUTES_PER_DAY, GAME_MINUTES_PER_WEEK, gameMinutesToRealMs } from '../sim/clock';
@@ -20,6 +21,14 @@ import { dungeonStatuses, squadDungeon, squadDungeonReadiness } from '../sim/dun
 import { externalActivityStatuses, squadExternalActivity } from '../sim/economy';
 import { levelingMapStatuses, squadLevelingMap, xpToNextLevel } from '../sim/leveling';
 import { raidStatuses } from '../sim/raid';
+import {
+  hallDeedsLine,
+  renownLabel,
+  renownRung,
+  renownStanding,
+  rosterCapForRung,
+  rungThreshold,
+} from '../sim/reputation';
 import { averageItemLevel, guildAverageItemLevel, guildAverageLevel } from '../sim/roster';
 import { activityQueue, nextRaidNight, nextSettlement } from '../sim/schedule';
 import type {
@@ -223,7 +232,21 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
           </div>
           <ul class="wallet-list" data-ref="wallet-list"></ul>
         </div>
-        <p class="empty-hint">「荣誉墙」在后续工单开放。</p>
+        <div class="renown-panel" data-ref="renown-card"></div>
+        <div class="honor-panel">
+          <div class="pool-head">
+            <h2 class="section-title">荣誉墙</h2>
+            <span class="pool-sub" data-ref="honor-sub"></span>
+          </div>
+          <div class="honor-wall" data-ref="honor-wall"></div>
+        </div>
+        <div class="hall-panel">
+          <div class="pool-head">
+            <h2 class="section-title">名人堂</h2>
+            <span class="pool-sub" data-ref="hall-sub"></span>
+          </div>
+          <ul class="hall-list" data-ref="hall-list"></ul>
+        </div>
       </section>
     </main>
     <section class="event-panel">
@@ -286,6 +309,11 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
   const selfDealPanelEl = requireElement<HTMLDivElement>(root, 'self-deal-panel');
   const walletSubEl = requireElement<HTMLSpanElement>(root, 'wallet-sub');
   const walletListEl = requireElement<HTMLUListElement>(root, 'wallet-list');
+  const renownCardEl = requireElement<HTMLDivElement>(root, 'renown-card');
+  const honorSubEl = requireElement<HTMLSpanElement>(root, 'honor-sub');
+  const honorWallEl = requireElement<HTMLDivElement>(root, 'honor-wall');
+  const hallSubEl = requireElement<HTMLSpanElement>(root, 'hall-sub');
+  const hallListEl = requireElement<HTMLUListElement>(root, 'hall-list');
 
   // 页签切换:纯展示行为(哪个 pane 可见),不是业务规则
   let activeTab: TabId = 'roster';
@@ -680,7 +708,9 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
   /** 申请池渲染:每张申请卡只展示画像数据,「招入/拒绝」交给门面裁决。 */
   function renderPool(state: GameState): void {
     const full = state.members.length >= state.rosterCap;
-    poolSubEl.textContent = `${state.applicants.length} 份申请 · 每游戏日按声望刷新`;
+    poolSubEl.textContent = `${state.applicants.length} 份申请 · 声望:${renownLabel(
+      renownRung(state.renownPoints),
+    )} · 每游戏日刷新`;
     poolFullHintEl.hidden = !full;
     if (full) {
       poolFullHintEl.textContent = `名册已满(${state.members.length}/${state.rosterCap}),淘汰团员可腾出名额。`;
@@ -1918,7 +1948,7 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
         el(
           'p',
           'self-deal-desc',
-          `会长利用分配权把装备分给自己的会长角色:每件自肥,出席团员忠诚 −${chairmanDef.selfDealLoyaltyCost}、声望 −${chairmanDef.selfDealReputationCost}(声望现为桩值),代价逐件累积。`,
+          `会长利用分配权把装备分给自己的会长角色:每件自肥,出席团员忠诚 −${chairmanDef.selfDealLoyaltyCost}、声望 −${chairmanDef.selfDealReputationCost},代价逐件累积(声望档位与星级见下方声望卡)。`,
         ),
       );
       card.append(
@@ -1957,6 +1987,145 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
         row.append(el('span', 'wallet-gold', `${member.personalGold} 金`));
         row.append(el('span', 'wallet-dkp', `DKP ${member.dkp}`));
         return row;
+      }),
+    );
+
+    // 声望卡 + 荣誉墙 + 名人堂(T12):全部只读状态与 sim 派生量
+    renderRenownCard(state);
+    renderHonorWall(state);
+    renderHallOfFame(state);
+  }
+
+  /** 声望卡:档位名 + 星级 + 升阶进度 + 名册上限联动与挖版权限(派生量来自 sim/reputation)。 */
+  function renderRenownCard(state: GameState): void {
+    const rung = renownRung(state.renownPoints);
+    const standing = renownStanding(rung);
+    const stars = '★'.repeat(standing.stars) + '☆'.repeat(3 - standing.stars);
+
+    const card = el('div', 'renown-card');
+    const head = el('div', 'pool-head');
+    head.append(el('h2', 'section-title', '声望'));
+    head.append(el('span', 'pool-sub', '首杀与里程碑加分 · 自肥扣分 · 档位驱动申请池与名册上限'));
+    card.append(head);
+
+    const titleRow = el('div', 'renown-title');
+    titleRow.append(el('span', 'renown-tier-name', standing.tier.name));
+    titleRow.append(el('span', 'renown-stars', stars));
+    card.append(titleRow);
+    card.append(el('p', 'renown-blurb', standing.tier.blurb));
+
+    // 升阶进度:当前声望值距下一阶(满阶显示封顶;门槛与数值换算都在 sim)
+    if (rung >= RENOWN_RUNG_COUNT) {
+      card.append(el('p', 'renown-progress', `声望值 ${state.renownPoints} —— 已至顶档,传说仍在续写。`));
+    } else {
+      const current = rungThreshold(rung);
+      const next = rungThreshold(rung + 1);
+      const gained = state.renownPoints - current;
+      const needed = next - current;
+      const track = el('div', 'vital-track renown-track');
+      const fill = el('div', 'vital-fill');
+      fill.style.width = `${clampPercent(Math.floor((gained / needed) * 100))}%`;
+      track.append(fill);
+      const row = el('div', 'renown-progress-row');
+      row.append(track);
+      row.append(el('span', 'renown-progress-text', `${gained}/${needed} → ${renownLabel(rung + 1)}`));
+      card.append(row);
+    }
+
+    const effects = el('div', 'loot-system-effects');
+    effects.append(el('span', 'effect-chip', `名册上限 ${state.rosterCap}/${rosterCapForRung(RENOWN_RUNG_COUNT)} 人`));
+    const poachTier = RENOWN_TIERS.find((tier) => tier.poachUnlocked);
+    effects.append(
+      el(
+        'span',
+        'effect-chip',
+        standing.tier.poachUnlocked
+          ? '挖角:可对背景公会出手'
+          : `挖角:${poachTier === undefined ? '暂未开放' : `${poachTier.name}起解锁`}`,
+      ),
+    );
+    card.append(effects);
+    renownCardEl.replaceChildren(card);
+  }
+
+  /** 荣誉墙:首杀徽章(带日期)/ 里程碑 / 稀有陈列,全部可追溯(数据来自状态)。 */
+  function renderHonorWall(state: GameState): void {
+    const wall = state.honorWall;
+    const total = wall.firstKills.length + wall.milestones.length + wall.rareDrops.length;
+    honorSubEl.textContent = `首杀 ${wall.firstKills.length} · 里程碑 ${wall.milestones.length} · 稀有 ${wall.rareDrops.length}`;
+
+    if (total === 0) {
+      honorWallEl.replaceChildren(
+        el('p', 'empty-hint', '墙上还空着 —— 首杀一名团本首领、达成里程碑或穿上一件紫装,都会挂上这面墙。'),
+      );
+      return;
+    }
+
+    const frag = document.createDocumentFragment();
+    if (wall.firstKills.length > 0) {
+      frag.append(el('h4', 'honor-section-title', '首杀徽章'));
+      const list = el('ul', 'honor-list');
+      for (const badge of [...wall.firstKills].reverse()) {
+        const row = el('li', 'honor-item honor-kill');
+        row.append(el('span', 'honor-kill-boss', badge.bossName));
+        row.append(el('span', 'honor-kill-raid', badge.raidName));
+        row.append(el('span', 'honor-stamp', formatGameStamp(badge.atGameMinutes)));
+        list.append(row);
+      }
+      frag.append(list);
+    }
+
+    if (wall.milestones.length > 0) {
+      frag.append(el('h4', 'honor-section-title', '里程碑'));
+      const list = el('ul', 'honor-list');
+      for (const record of [...wall.milestones].reverse()) {
+        const row = el('li', 'honor-item honor-milestone');
+        row.append(el('span', 'honor-kill-boss', record.name));
+        row.append(el('span', 'honor-stamp', formatGameStamp(record.atGameMinutes)));
+        list.append(row);
+      }
+      frag.append(list);
+    }
+
+    if (wall.rareDrops.length > 0) {
+      frag.append(el('h4', 'honor-section-title', '稀有陈列'));
+      const list = el('ul', 'honor-list');
+      for (const record of [...wall.rareDrops].reverse()) {
+        const row = el('li', 'honor-item honor-rare');
+        row.append(el('span', `gear-quality ${QUALITY_CLASS[record.quality]}`, record.quality));
+        row.append(el('span', 'honor-rare-item', `${record.slot} · 装等 ${record.itemLevel}`));
+        row.append(el('span', 'honor-rare-dest', `→ ${record.holder}(${record.source})`));
+        row.append(el('span', 'honor-stamp', formatGameStamp(record.atGameMinutes)));
+        list.append(row);
+      }
+      frag.append(list);
+    }
+    honorWallEl.replaceChildren(frag);
+  }
+
+  /** 名人堂:离会团员的去向与功绩(数据来自状态;台词/去向在离会时已定)。 */
+  function renderHallOfFame(state: GameState): void {
+    hallSubEl.textContent = `${state.hallOfFame.length} 位离会团员`;
+    if (state.hallOfFame.length === 0) {
+      hallListEl.replaceChildren(el('li', 'empty-hint', '还没有人离开 —— 淘汰与自动退会的团员会在这里留下去向与功绩。'));
+      return;
+    }
+    hallListEl.replaceChildren(
+      ...[...state.hallOfFame].reverse().map((entry) => {
+        const cls = CLASS_BY_ID.get(entry.classId);
+        const spec = cls?.specs.find((s) => s.id === entry.specId);
+        const card = el('li', `hall-card hall-${entry.reason === '会长淘汰' ? 'dismissed' : 'resigned'}`);
+        const head = el('div', 'hall-head');
+        const name = el('span', 'member-name', entry.name);
+        name.append(el('span', 'hall-reason', entry.reason));
+        head.append(name);
+        head.append(el('span', 'hall-stamp', formatGameStamp(entry.leftAtGameMinutes)));
+        card.append(head);
+        card.append(el('p', 'hall-classline', `${cls?.name ?? '?'} · ${spec?.name ?? '?'} · Lv${entry.level}(装等 ${entry.itemLevel})`));
+        card.append(el('p', 'hall-farewell', `离会台词:「${entry.farewell}」`));
+        card.append(el('p', 'hall-destination', `去向:${entry.destination}`));
+        card.append(el('p', 'hall-deeds', `功绩:${hallDeedsLine(entry)}`));
+        return card;
       }),
     );
   }
@@ -2098,6 +2267,8 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
       el('div', 'stat stat-accent', `装等 ${averageItemLevel(member)}`),
       el('div', 'stat', `个人金 ${member.personalGold}`),
       el('div', 'stat', `DKP ${member.dkp}`),
+      el('div', 'stat', `击杀 ${member.bossKills}`),
+      el('div', 'stat', `紫装 ${member.rareLootWon}`),
     );
     frag.append(stats);
 
