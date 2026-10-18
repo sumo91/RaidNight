@@ -156,6 +156,8 @@ function roleIconImg(role: string, className = 'pixel-art icon-role'): HTMLImage
 }
 
 export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
+  // 外壳样式(.app-shell:480px 竖屏基准栏 + 100dvh 应用框架)落在挂载点上
+  root.classList.add('app-shell');
   root.innerHTML = `
     <header class="app-header">
       <div class="guild-row">
@@ -170,8 +172,8 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
       </div>
     </header>
     <main class="panes">
-      <section class="pane" data-pane="roster">
-        <div class="roster-browse" data-ref="roster-browse">
+      <section class="pane" data-pane="roster" data-ref="roster-pane">
+        <div class="roster-browse">
           <div class="pool-panel">
             <div class="pool-head">
               <h2 class="section-title">申请池</h2>
@@ -183,7 +185,7 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
           <h2 class="section-title">在册团员</h2>
           <ul class="roster-list" data-ref="roster-list"></ul>
         </div>
-        <div class="member-detail" data-ref="member-detail" hidden></div>
+        <div class="member-detail" data-ref="member-detail"></div>
       </section>
       <section class="pane" data-pane="squads" hidden>
         <div class="team-check" data-ref="team-check"></div>
@@ -388,7 +390,7 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
   const gameClockEl = requireElement<HTMLDivElement>(root, 'game-clock');
   const saveToastEl = requireElement<HTMLParagraphElement>(root, 'save-toast');
   const feedEl = requireElement<HTMLUListElement>(root, 'event-feed');
-  const rosterBrowseEl = requireElement<HTMLDivElement>(root, 'roster-browse');
+  const rosterPaneEl = requireElement<HTMLElement>(root, 'roster-pane');
   const rosterListEl = requireElement<HTMLUListElement>(root, 'roster-list');
   const memberDetailEl = requireElement<HTMLDivElement>(root, 'member-detail');
   const poolSubEl = requireElement<HTMLSpanElement>(root, 'pool-sub');
@@ -941,7 +943,10 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
     }
   }
 
-  /** 名册区渲染:无选中 → 申请池 + 列表;有选中 → 详情(成员不存在时回退列表)。 */
+  /** 名册区渲染:列表常驻渲染,详情栏随选中态填充(选中者已不在名册时回退未选中)。
+   *  选中态只标记在名册页上(data-selected),此处不感知布局方向 ——
+   *  竖屏 CSS 借它做「浏览 ↔ 详情」单视图切换,横屏/宽窗 CSS 放开成
+   *  「名册 + 详情」双栏(ADR-0001:横屏界面由竖屏布局派生,不写第二套 UI 逻辑)。 */
   function renderRoster(): void {
     const state = latestState;
     if (state === null) {
@@ -951,16 +956,29 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
       selectedMemberId === null
         ? undefined
         : state.members.find((m) => m.id === selectedMemberId);
-    if (selected === undefined) {
-      selectedMemberId = null;
-      memberDetailEl.hidden = true;
-      rosterBrowseEl.hidden = false;
-      renderRosterList(state.members);
+    selectedMemberId = selected === undefined ? null : selected.id;
+    if (selectedMemberId === null) {
+      rosterPaneEl.removeAttribute('data-selected');
     } else {
-      rosterBrowseEl.hidden = true;
-      memberDetailEl.hidden = false;
+      rosterPaneEl.dataset.selected = String(selectedMemberId);
+    }
+    renderRosterList(state.members);
+    if (selected === undefined) {
+      renderDetailPlaceholder();
+    } else {
       renderMemberDetail(selected);
     }
+  }
+
+  /** 详情栏空态:竖屏下详情栏整体隐藏不可见,横屏/宽窗下占住右栏等待选择。 */
+  function renderDetailPlaceholder(): void {
+    memberDetailEl.replaceChildren(
+      el(
+        'p',
+        'detail-placeholder',
+        '从左侧名册点选一位团员,这里展示 TA 的完整档案 —— 等级装等、三维状态、出勤画像、性格技艺与八部位装备。',
+      ),
+    );
   }
 
   /** 申请池渲染:每张申请卡只展示画像数据,「招入/拒绝」交给门面裁决。 */
@@ -3263,7 +3281,11 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
           ),
         );
 
-        const row = el('li', 'roster-row');
+        // 选中行高亮:横屏左栏常驻时标明当前查看对象(竖屏切详情时不可见,无副作用)
+        const row = el(
+          'li',
+          `roster-row${member.id === selectedMemberId ? ' roster-row-selected' : ''}`,
+        );
         row.dataset.memberId = String(member.id);
         row.append(pixelImg(portraitDataUrl(member.classId), `${cls?.name ?? '未知'}职业肖像`, 'pixel-art portrait-sm'));
         const body = el('div', 'roster-row-body');

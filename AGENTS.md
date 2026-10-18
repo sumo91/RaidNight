@@ -12,7 +12,7 @@
   - `facade.ts` 门面与纯函数 `step`；`state.ts` 状态形状；`commands.ts` 会长指令；`events.ts` 事件日志；`clock.ts` 游戏时钟常量与换算；`rng.ts` 注入式种子随机源；`schedule.ts` / `widget.ts` 等纯派生模块（只读状态，供日程页与小组件共用）。
 - `src/content/` — 数据驱动内容（文案池、物品表等）。内容禁止硬编码进 `sim`。
 - `src/art/` — 像素美术管线（T17）：全局调色板、字符画解析、统一后处理（量化 + 描边）、零依赖 PNG 编码。纯函数、不经门面（不是游戏本体）；风格契约见 `docs/art-style.md`，资产授权台账见 `docs/art-licenses.md`。
-- `src/ui/` — 状态之上的薄渲染层：禁止业务规则、禁止在此换算或推进游戏时间（`app.ts` 全窗五页签、`widget.ts` 小组件卡）。
+- `src/ui/` — 状态之上的薄渲染层：禁止业务规则、禁止在此换算或推进游戏时间（`app.ts` 全窗五页签、`widget.ts` 小组件卡）。布局竖屏优先；横屏/宽窗双栏（左名册 + 右详情）由 `app.css` 末尾的媒体查询从竖屏规则派生（T20），渲染逻辑不感知方向、无第二套 UI 逻辑；小组件页不加载 `app.css`。
 - `src/shell/` — 装配层共享设施（T19）：`runtime.ts` 模拟运行时（门面 + 自动存档 + 现实时钟滴答 + 离线补结算，`start/stop` 幂等供属主切换）；`ownership.ts` 模拟属主仲裁的页内侧；`tauri.ts` 桌面壳桥（零 npm 依赖，走 `window.__TAURI__` 注入）；`widget-window.ts` / `widget-geometry.ts` 小组件窗口几何（贴角吸附 / 记忆，纯数学可直测）。
 - `src/main.ts` / `src/widget-main.ts` — 两个装配入口：全窗（竖屏应用）与小组件窗。现实时间只出现在装配层（`main.ts` + `shell/` + `widget-main.ts`），把现实时间增量换算为游戏时间增量；桌面壳内两窗经属主仲裁，同一时刻只有一窗推进模拟。
 - `src-tauri/` — Tauri v2 桌面壳（T19，macOS 形态）：小组件窗（无边框、置顶、透明、可调）+ 按需全窗 + 模拟属主仲裁（`wn:owner` 事件 / `sim_owner` 命令）。壳内无游戏规则；运行需 Rust 工具链，见 `src-tauri/README.md`（Windows 交叉构建与打包属 T21）。

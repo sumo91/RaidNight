@@ -1,4 +1,5 @@
-/* 竖屏优先的应用外壳(GLOSSARY:布局以竖屏为基准;横屏与小组件模式后续派生)。 */
+/* 竖屏优先的应用外壳(GLOSSARY:布局以竖屏为基准)。
+   横屏/宽窗的双栏派生在文末媒体查询:同一 DOM、同一渲染逻辑,只换排布。 */
 
 :root {
   color-scheme: dark;
@@ -245,6 +246,13 @@ body {
   border-color: #46365f;
 }
 
+/* 选中行(横屏左栏常驻时的当前查看对象;竖屏列表被切走时不可见) */
+.roster-row-selected {
+  background: #2a2136;
+  border-color: var(--accent);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
 .row-top {
   display: flex;
   justify-content: space-between;
@@ -425,6 +433,30 @@ body {
 }
 
 /* ===== 团员详情 ===== */
+
+/* 名册页的「浏览 ↔ 详情」切换交给 CSS,由名册页上的选中态 data-selected 驱动:
+   竖屏二选一(无选中只见浏览,有选中只见详情);
+   横屏/宽窗媒体查询把两条都放开成双栏 —— 同一 DOM、同一渲染逻辑,
+   横屏是竖屏布局的派生(ADR-0001),不另写一套 UI 逻辑。 */
+.pane[data-pane='roster']:not([data-selected]) > .member-detail {
+  display: none;
+}
+
+.pane[data-pane='roster'][data-selected] > .roster-browse {
+  display: none;
+}
+
+/* 详情栏空态占位(竖屏不可见;横屏/宽窗占住右栏) */
+.detail-placeholder {
+  margin: 32px 0;
+  padding: 28px 20px;
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 2;
+  text-align: center;
+}
 
 .member-detail {
   padding-bottom: 12px;
@@ -2963,4 +2995,90 @@ button.tactic-opt:hover:not(:disabled) {
   margin: 6px 0 0;
   font-size: 12.5px;
   color: var(--gold, #d4a017);
+}
+
+/* ===== 横屏 / 宽窗派生布局(T20,ADR-0001:布局竖屏优先,一套布局三端派生) =====
+   触发:视口宽 ≥760px(桌面宽窗、横屏平板),或横屏且宽 ≥640px(横屏手机)。
+   派生方式:竖屏规则原样保留,这里只放宽外壳、把名册页放开为双栏 ——
+   左栏名册列表(常驻、可滚动),右栏团员详情与操作;其余页面维持单列滚动。
+   小组件模式(widget.html)不加载本样式表,不受影响。 */
+@media (min-width: 760px), (orientation: landscape) and (min-width: 640px) {
+  .app-shell {
+    max-width: 1100px;
+  }
+
+  /* 顶栏压成一行:横屏的高度比宽度金贵 */
+  .app-header {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 4px 16px;
+    padding: 10px 24px 8px;
+  }
+
+  .app-header .guild-row,
+  .app-header .game-clock,
+  .app-header .save-row {
+    margin: 0;
+  }
+
+  .app-header .save-row {
+    margin-left: auto;
+  }
+
+  .panes {
+    padding: 14px 24px;
+  }
+
+  /* 事件日志在横屏矮窗里收矮,把高度让给内容区 */
+  .event-panel {
+    height: 108px;
+  }
+
+  /* ———— 名册页双栏:左列表、右详情,两栏各自滚动 ———— */
+  .pane[data-pane='roster'] {
+    display: grid;
+    grid-template-columns: minmax(300px, 5fr) minmax(0, 7fr);
+    column-gap: 20px;
+    height: 100%;
+  }
+
+  /* 放开竖屏的单视图切换(与竖屏规则同特异性,后置生效):两栏常驻,
+     左栏点选即在右栏换人 —— 无需「返回名册」往返 */
+  .pane[data-pane='roster']:not([data-selected]) > .member-detail {
+    display: block;
+  }
+
+  .pane[data-pane='roster'][data-selected] > .roster-browse {
+    display: block;
+  }
+
+  .pane[data-pane='roster'] > .roster-browse,
+  .pane[data-pane='roster'] > .member-detail {
+    height: 100%;
+    min-height: 0;
+    overflow-y: auto;
+    padding-right: 6px;
+    overscroll-behavior: contain;
+  }
+
+  /* 列表常驻左栏,「返回名册」只是竖屏的导航 */
+  .detail-back {
+    display: none;
+  }
+}
+
+/* 宽窗加码(视口宽 ≥980px,桌面/横屏平板):其余页面的卡列表并双列,
+   阅读效率对齐宽屏;行式列表(队列/排行/新闻)保持单列。 */
+@media (min-width: 980px) {
+  .map-list,
+  .raid-list,
+  .squad-list,
+  .loot-system-list,
+  .hall-list,
+  .assign-list,
+  .bench-list {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
