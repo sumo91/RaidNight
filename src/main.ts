@@ -31,10 +31,14 @@ const runtime = new SimRuntime(
   },
 );
 
-/** 清档重开:清空存储并重载页面(UI 的「清档重开」按钮经此回调触发)。 */
+/**
+ * 清档重开:等本地存储与桌面文件副本都清完再重开页面。
+ * (T21 评审修复:删除文件是异步 IPC,不等落地就 reload,新页回灌可能
+ * 把旧文件档救回来 —— 现在先兑现 wipeStorage 再导航,屏障兜底见
+ * shell/save-sync.ts。)
+ */
 function wipeSave(): void {
-  runtime.wipeStorage();
-  window.location.reload();
+  void runtime.wipeStorage().then(() => window.location.reload());
 }
 
 /** 导出存档文件:文件名只用游戏时间与公会名;封皮带导出时刻(导入时按其补离线)。 */

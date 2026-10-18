@@ -40,7 +40,9 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: 17
+          # Capacitor 8.5.3 的 Gradle 要求 Java 21(capacitor.build.gradle 的
+          # VERSION_21;JDK17 的 javac 不支持 release 21,assemble 必挂)
+          java-version: 21
 
       - name: 安装 npm 依赖
         run: npm ci

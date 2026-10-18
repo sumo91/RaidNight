@@ -35,6 +35,13 @@ export const DEV_SEED = 20261018;
 const SAVE_KEY = 'wowidle.save';
 
 /**
+ * 清档屏障(T21 评审修复):最近一次「清档重开」的时刻。
+ * 删除桌面文件是异步 IPC,极端情况下(删除晚于新页回灌、或删除失败)
+ * 旧文件档还在磁盘上 —— 回灌时以此为界,早于它的文件档不复活。
+ */
+const WIPE_TOMBSTONE_KEY = 'wowidle.wipeAt';
+
+/**
  * 离线补结算的分段上限:1 游戏周(= 1 现实天)一段。
  * 单段开销有界;分段不改结果 —— 门面对同一起止时间的任意切分严格等价
  * (sim/offline.test.ts:分段与整跳等价)。
@@ -66,6 +73,17 @@ function loadSave(): { state: GameState; savedAtMs: number } | null {
     return raw === null ? null : decodeSaveEnvelope(raw);
   } catch {
     return null;
+  }
+}
+
+/** 读清档屏障时刻(存储不可用或从未清档 = 0,不设界)。 */
+function readWipeTombstone(): number {
+  try {
+    const raw = localStorage.getItem(WIPE_TOMBSTONE_KEY);
+    const parsed = raw === null ? Number.NaN : Number(raw);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+  } catch {
+    return 0;
   }
 }
 
@@ -149,7 +167,7 @@ export class SimRuntime {
     } catch {
       local = null;
     }
-    const restore = pickRestoreSource(local, disk);
+    const restore = pickRestoreSource(local, disk, readWipeTombstone());
     if (restore === null) {
       return;
     }
@@ -194,14 +212,23 @@ export class SimRuntime {
     return encodeSave(this.facade.state, Date.now());
   }
 
-  /** 清空本机存档(入口随后自行重开页面);桌面端连同文件权威副本一起清。 */
-  wipeStorage(): void {
+  /**
+   * 清空本机存档(入口随后自行重开页面):先立清档屏障,再清热副本,
+   * 最后等桌面文件副本删完 —— 调用方在本 Promise 兑现后再 reload,
+   * 保证新页回灌时旧文件档已消失(即便没删掉也被屏障挡住)。
+   */
+  async wipeStorage(): Promise<void> {
+    try {
+      localStorage.setItem(WIPE_TOMBSTONE_KEY, String(Date.now()));
+    } catch {
+      // 屏障写不进:删除仍会进行,极端场景下靠删除本身兜底
+    }
     try {
       localStorage.removeItem(SAVE_KEY);
     } catch {
       // 清不掉也无妨:重载后会被覆盖写
     }
-    void deleteSaveFile();
+    await deleteSaveFile();
   }
 
   /** 现实时间 → 游戏时间增量:增量取整并保留余数进位,保证确定性不受浮点影响。 */

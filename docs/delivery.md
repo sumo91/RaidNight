@@ -88,9 +88,10 @@ Android SDK,APK 构建一律走 CI:`.github/workflows/build-android.yml`。
 1. Actions → 「安卓构建(Capacitor)」→ Run workflow(或打 `v*` tag);
 2. 作业内容:`npm ci` → `npm run build` → `cap sync android` →
    `gradlew assembleDebug assembleRelease`(GitHub 托管 runner 自带
-   JDK17 + Android SDK);
+   Android SDK,JDK 由 setup-java 供给);
 3. 产物:artifact `WowIdle-android-apk`(debug 可装即玩;release 无密钥时
    回退调试签名 —— `android/app/build.gradle` 的 `releaseSigning`)。
+   JDK 用 21(Capacitor 8.5.3 的 Gradle 是 `VERSION_21`,17 编不过)。
 
 **发布签名(上 TapTap 前必做,一次性)**:
 

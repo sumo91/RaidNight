@@ -56,3 +56,31 @@ describe('T21 存档恢复源裁决', () => {
     expect(pickRestoreSource(plain, plain)).toBeNull();
   });
 });
+
+describe('T21 评审修复:清档屏障', () => {
+  it('文件档早于清档时刻 ⇒ 不复活(删除未落地/失败时的残留)', () => {
+    const state = facadeState();
+    const staleDisk = JSON.stringify({ ...JSON.parse(state), savedAtMs: 4000 });
+    // 本机档已清(local null)、文件档还是清档前的 —— 正是评审指出的竞态现场
+    expect(pickRestoreSource(null, staleDisk, 5000)).toBeNull();
+    expect(pickRestoreSource('本机损坏档', staleDisk, 5000)).toBeNull();
+  });
+
+  it('文件档晚于清档时刻 ⇒ 正常恢复(清档后落盘的合法进度)', () => {
+    const state = facadeState();
+    const freshDisk = JSON.stringify({ ...JSON.parse(state), savedAtMs: 6000 });
+    expect(pickRestoreSource(null, freshDisk, 5000)).toBe(freshDisk);
+  });
+
+  it('无时间基准(savedAtMs=0)的文件档在设屏障时视为残留 ⇒ 不复活', () => {
+    const state = facadeState();
+    const undated = JSON.stringify({ ...JSON.parse(state), savedAtMs: 0 });
+    expect(pickRestoreSource(null, undated, 5000)).toBeNull();
+  });
+
+  it('从未清档(缺省 0)⇒ 不设屏障,既有语义不变', () => {
+    const state = facadeState();
+    expect(pickRestoreSource(null, state)).toBe(state);
+    expect(pickRestoreSource(null, state, 0)).toBe(state);
+  });
+});

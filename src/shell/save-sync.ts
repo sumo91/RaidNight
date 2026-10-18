@@ -19,22 +19,28 @@ import { decodeSaveEnvelope } from '../sim/save';
  *
  * 规则:
  * · 文件档缺失或损坏 → 不恢复(null;localStorage(或新档)照旧);
+ * · 清档屏障(T21 评审修复):封皮 savedAtMs ≤ 清档时刻 wipedAtMs 的
+ *   文件档一律视为清档前残留(文件删除未落或失败),不得复活;
  * · 本机 localStorage 档缺失或损坏 → 文件是救命稻草,恢复文件;
  * · 两份都完好 → 取封皮 savedAtMs(落盘时刻)新者;同刻或文件更旧
  *   → 不恢复(localStorage 已是最新)。savedAtMs 缺省(0)的旧档
  *   视为最旧,带时间基准的一方胜出。
  *
- * @param localRaw localStorage 里的原始存档文本(可能为 null)
- * @param diskRaw  桌面存档文件的原始文本(可能为 null)
+ * @param localRaw  localStorage 里的原始存档文本(可能为 null)
+ * @param diskRaw   桌面存档文件的原始文本(可能为 null)
+ * @param wipedAtMs 最近一次清档的时刻(0 = 从未清档,不设屏障)
  * @returns 应写入 localStorage 的存档文本;无需恢复返回 null
  */
-export function pickRestoreSource(localRaw: string | null, diskRaw: string | null): string | null {
+export function pickRestoreSource(localRaw: string | null, diskRaw: string | null, wipedAtMs = 0): string | null {
   if (diskRaw === null) {
     return null;
   }
   const disk = decodeSaveEnvelope(diskRaw);
   if (disk === null) {
     return null; // 文件损坏(比如磁盘上的半个 JSON):不当恢复源
+  }
+  if (wipedAtMs > 0 && disk.savedAtMs <= wipedAtMs) {
+    return null; // 清档前的残留(删除未落地/失败):静默复活 = 清档失效
   }
   if (localRaw === null) {
     return diskRaw;
