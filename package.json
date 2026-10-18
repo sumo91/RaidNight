@@ -9,9 +9,11 @@
     "build": "tsc --noEmit && vite build --configLoader runner",
     "preview": "vite preview",
     "test": "vitest run --configLoader runner",
-    "test:watch": "vitest --configLoader runner"
+    "test:watch": "vitest --configLoader runner",
+    "gen:art": "vite-node --configLoader runner scripts/gen-art.ts"
   },
   "devDependencies": {
+    "@types/node": "^26.6.5",
     "typescript": "^5.9.3",
     "vite": "^7.1.12",
     "vitest": "^3.2.4"

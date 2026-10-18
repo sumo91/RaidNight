@@ -2789,3 +2789,114 @@ button.tactic-opt:hover:not(:disabled) {
 .pvp-gear-slot-delta {
   font-variant-numeric: tabular-nums;
 }
+
+/* ===== 像素资产(T17 美术管线):统一呈现规矩与三类页面换装 ===== */
+
+/* 像素图唯一出口:任何 <img> 挂 pixel-art,一律最近邻缩放,禁插值糊边 */
+.pixel-art {
+  image-rendering: pixelated;
+  flex: none;
+  user-select: none;
+}
+
+/* 肖像三档:列表 24(1:1)/ 详情 72(3 倍)/ 密集行 24;整数倍缩放不糊 */
+.portrait-sm {
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+}
+
+.portrait-xs {
+  width: 24px;
+  height: 24px;
+  border-radius: 3px;
+}
+
+.portrait-lg {
+  width: 72px;
+  height: 72px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: #171221;
+}
+
+/* 图标三档:职能 24(2 倍)/ 阵容行 12(1:1)/ 品质宝石 16(2 倍)/ 徽记 32(2 倍) */
+.icon-role {
+  width: 24px;
+  height: 24px;
+}
+
+.icon-role-xs {
+  width: 12px;
+  height: 12px;
+}
+
+.icon-gem {
+  width: 16px;
+  height: 16px;
+}
+
+.emblem-md {
+  width: 32px;
+  height: 32px;
+}
+
+/* 名册行:肖像在左,文字信息列在右 */
+.roster-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.roster-row-body {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.roster-row-body .row-top,
+.roster-row-body .row-bottom {
+  margin-top: 0;
+}
+
+/* 申请池卡:头部 = 肖像 + 概要 */
+.pool-card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.pool-card-head .row-top {
+  flex: 1;
+  min-width: 0;
+}
+
+/* 团员详情:大肖像在标题左侧 */
+.detail-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* 职能计数:图标与文字同排 */
+.role-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* 结果卡:徽记与判词同排居中 */
+.report-banner {
+  align-items: center;
+}
+
+.report-member {
+  align-items: center;
+}
+
+.report-drop {
+  align-items: center;
+}

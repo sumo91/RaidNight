@@ -1,0 +1,105 @@
+{
+  "generatedBy": "npm run gen:art",
+  "assets": [
+    {
+      "file": "classes.png",
+      "bytes": 1016711,
+      "sha256": "f63cde658579e292f7abcae38af283082c1d28571e39c140c5637b46b2a66c9f"
+    },
+    {
+      "file": "icons.png",
+      "bytes": 921898,
+      "sha256": "25ef2128098a5922cb422be4a14634941b7b51df44c3bcdea57e056fc577c06c"
+    },
+    {
+      "file": "warrior.png",
+      "bytes": 2396,
+      "sha256": "44d6eccaa4cbf6273940e7c06f1ed27df82cfc4e21f106498cdc9aaade4ccd4a"
+    },
+    {
+      "file": "paladin.png",
+      "bytes": 2396,
+      "sha256": "400ea205399e8de02771425a4aaddb99778b842d180a879b2b5624fe20262328"
+    },
+    {
+      "file": "hunter.png",
+      "bytes": 2396,
+      "sha256": "24ead39186e8ed826fdfe7b86be75f385f6afced3125cfa6fcbe01f5ab846778"
+    },
+    {
+      "file": "rogue.png",
+      "bytes": 2396,
+      "sha256": "cff8cb9e329e8b99205ff902375f51bd92a56180e90d97583d4387c5a51aef32"
+    },
+    {
+      "file": "priest.png",
+      "bytes": 2396,
+      "sha256": "c9796dccc6fa2ec70401ee3353ecc9b06350cef100f00ab491828482bd66f0cc"
+    },
+    {
+      "file": "shaman.png",
+      "bytes": 2396,
+      "sha256": "26a9e266c8c6d02c441737e121c6ea399de3c730a529a2565db2657ad3e6c3cf"
+    },
+    {
+      "file": "mage.png",
+      "bytes": 2396,
+      "sha256": "229c9bbe8fbbd14ab3bcec6ba8bdb07ff7fbbc5227d581867b4beddb30d9d2e6"
+    },
+    {
+      "file": "warlock.png",
+      "bytes": 2396,
+      "sha256": "e939a0d7ba06b6a27c6e87ff1a859609621a6d25ced8c311245d46523f40c39d"
+    },
+    {
+      "file": "druid.png",
+      "bytes": 2396,
+      "sha256": "2f7e78d066ea69dabbca18ad42afd19942aa95d57f24f211966a7be53a7ab1b1"
+    },
+    {
+      "file": "role-tank.png",
+      "bytes": 656,
+      "sha256": "0bbf2ba6492131331f39b767fa8dd0b6efbda0467216eb994c93e840c26c3832"
+    },
+    {
+      "file": "role-heal.png",
+      "bytes": 656,
+      "sha256": "6348c270dccf506eeefa5ee7c7286c9f987e6ed06408a11e8aae92c0a8c14b77"
+    },
+    {
+      "file": "role-dps.png",
+      "bytes": 656,
+      "sha256": "8d7ed7337e66c04bb779ad93c502697142580314b49b4038c7a32227911b44f3"
+    },
+    {
+      "file": "emblem-win.png",
+      "bytes": 1108,
+      "sha256": "d97291b5dbce509c30e5345d59d18853a859117debcc21662628bdb12087a6e6"
+    },
+    {
+      "file": "emblem-fail.png",
+      "bytes": 1108,
+      "sha256": "ed06dce07a000e5495405fbf6eab27fa3c468e01ad5928d232d090bb3c67ec9f"
+    },
+    {
+      "file": "gem-white.png",
+      "bytes": 332,
+      "sha256": "1ae933edd1ce901e7b1fef573f6e80bc187bad10ac289a9a0ffcedc51bcac3fa"
+    },
+    {
+      "file": "gem-green.png",
+      "bytes": 332,
+      "sha256": "ac597dcc050ca05beabc78c092084f999c5d8e66e4a59d863449a5db925b871a"
+    },
+    {
+      "file": "gem-blue.png",
+      "bytes": 332,
+      "sha256": "af2ace4bd15080b9de5b0539c507399a59cb5e792039a8c7dedb10e122a77047"
+    },
+    {
+      "file": "gem-purple.png",
+      "bytes": 332,
+      "sha256": "b51110950abe8b74d11ea13c52476a5d3bfdf5b4f2072575f9e7b59c6e6f50f2"
+    }
+  ]
+}

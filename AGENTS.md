@@ -11,8 +11,10 @@
 - `src/sim/` — 游戏本体：确定性模拟门面状态机，**全项目唯一测试接缝**。输入 = 会长指令 + 游戏时间增量，输出 = 新状态 + 事件日志。
   - `facade.ts` 门面与纯函数 `step`；`state.ts` 状态形状；`commands.ts` 会长指令；`events.ts` 事件日志；`clock.ts` 游戏时钟常量与换算；`rng.ts` 注入式种子随机源。
 - `src/content/` — 数据驱动内容（文案池、物品表等）。内容禁止硬编码进 `sim`。
+- `src/art/` — 像素美术管线（T17）：全局调色板、字符画解析、统一后处理（量化 + 描边）、零依赖 PNG 编码。纯函数、不经门面（不是游戏本体）；风格契约见 `docs/art-style.md`，资产授权台账见 `docs/art-licenses.md`。
 - `src/ui/` — 状态之上的薄渲染层：禁止业务规则、禁止在此换算或推进游戏时间。
 - `src/main.ts` — 装配层：创建门面、挂载 UI、把现实时间增量换算为游戏时间增量（全项目唯一允许出现现实时间的地方）。
+- `scripts/` — 开发期工具（如 `gen-art.ts` 样张生成，`npm run gen:art`）。
 - `index.html` / `vite.config.ts` / `vitest.config.ts` — 竖屏应用外壳与构建、测试配置。
 
 ### 如何测试

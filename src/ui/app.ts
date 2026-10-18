@@ -8,6 +8,7 @@ import {
   type LootSystemId,
 } from '../content/economy';
 import { GEAR_SLOTS, type Quality } from '../content/gear';
+import { type IconId } from '../content/icons';
 import { LEVELING } from '../content/maps';
 import {
   DEFAULT_WEEKLY_GOAL,
@@ -64,6 +65,7 @@ import type {
   RaidBossOutcome,
   RaidNightReport,
 } from '../sim/state';
+import { iconDataUrl, pixelImg, portraitDataUrl } from './artwork';
 import { formatGameClock, formatGameDuration, formatGameStamp, formatRealDuration } from './format';
 
 /**
@@ -131,6 +133,27 @@ const QUALITY_CLASS: Record<Quality, string> = {
   '蓝': 'q-blue',
   '紫': 'q-purple',
 };
+
+/** 装备品质 → 像素宝石图标(纯展示映射;品质语义在 sim/content)。 */
+const QUALITY_GEM: Record<Quality, IconId> = {
+  '白': 'gem-white',
+  '绿': 'gem-green',
+  '蓝': 'gem-blue',
+  '紫': 'gem-purple',
+};
+
+/** 职能名 → 像素图标(结果卡阵容行用;职能语义在 content/classes)。 */
+const ROLE_ICON: Record<string, IconId> = {
+  '坦克': 'role-tank',
+  '治疗': 'role-heal',
+  '输出': 'role-dps',
+};
+
+/** 职能像素小图(缺职能信息时不出图,只留文字)。 */
+function roleIconImg(role: string, className = 'pixel-art icon-role'): HTMLImageElement | null {
+  const id = ROLE_ICON[role];
+  return id === undefined ? null : pixelImg(iconDataUrl(id), `${role}职能图标`, className);
+}
 
 export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
   root.innerHTML = `
@@ -991,7 +1014,10 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
         actions.append(recruit, reject);
 
         const card = el('li', 'pool-card');
-        card.append(top, bottom, actions);
+        const head = el('div', 'pool-card-head');
+        const portrait = pixelImg(portraitDataUrl(profile.classId), `${cls?.name ?? '未知'}职业肖像`, 'pixel-art portrait-sm');
+        head.append(portrait, top);
+        card.append(head, bottom, actions);
         return card;
       }),
     );
@@ -1108,9 +1134,15 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
 
     // 职能结构:计数 + 缺口实时标示(验收标准 1)
     const roles = el('div', 'squad-roles');
-    roles.append(el('span', 'role-count', `坦克 ${composition.roleCounts['坦克']}`));
-    roles.append(el('span', 'role-count', `治疗 ${composition.roleCounts['治疗']}`));
-    roles.append(el('span', 'role-count', `输出 ${composition.roleCounts['输出']}`));
+    for (const roleName of ['坦克', '治疗', '输出'] as const) {
+      const chip = el('span', 'role-count');
+      const icon = roleIconImg(roleName);
+      if (icon !== null) {
+        chip.append(icon);
+      }
+      chip.append(document.createTextNode(` ${roleName} ${composition.roleCounts[roleName]}`));
+      roles.append(chip);
+    }
     if (composition.gaps.length > 0) {
       for (const gap of composition.gaps) {
         const badge = el(
@@ -1153,6 +1185,7 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
       const cls = CLASS_BY_ID.get(member.classId);
       const spec = cls?.specs.find((s) => s.id === member.specId);
       const row = el('li', 'squad-member');
+      row.append(pixelImg(portraitDataUrl(member.classId), `${cls?.name ?? '未知'}职业肖像`, 'pixel-art portrait-xs'));
       const info = el('span', 'squad-member-info');
       const nameSpan = el('span', 'member-name', member.name);
       if (member.isChairman) {
@@ -1576,6 +1609,9 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
     card.append(head);
 
     const banner = el('div', 'report-banner');
+    banner.append(
+      pixelImg(iconDataUrl(report.victory ? 'emblem-win' : 'emblem-fail'), report.victory ? '告捷徽记' : '失利徽记', 'pixel-art emblem-md'),
+    );
     banner.append(el('span', 'report-verdict', report.victory ? '告捷' : '失利'));
     banner.append(
       el(
@@ -1597,6 +1633,10 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
     const lineup = el('ul', 'report-lineup');
     for (const member of report.members) {
       const li = el('li', 'report-member');
+      const roleIcon = roleIconImg(member.role, 'pixel-art icon-role-xs');
+      if (roleIcon !== null) {
+        li.append(roleIcon);
+      }
       li.append(el('span', 'member-name', member.name));
       li.append(el('span', 'report-member-role', member.role));
       li.append(el('span', 'report-member-ilvl', `装等${member.itemLevel}`));
@@ -2471,6 +2511,9 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
     card.append(head);
 
     const banner = el('div', 'report-banner');
+    banner.append(
+      pixelImg(iconDataUrl(report.success ? 'emblem-win' : 'emblem-fail'), report.success ? '告捷徽记' : '失利徽记', 'pixel-art emblem-md'),
+    );
     banner.append(el('span', 'report-verdict', report.success ? '速通' : '败退'));
     banner.append(
       el(
@@ -2484,6 +2527,10 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
     const lineup = el('ul', 'report-lineup');
     for (const member of report.members) {
       const li = el('li', 'report-member');
+      const roleIcon = roleIconImg(member.role, 'pixel-art icon-role-xs');
+      if (roleIcon !== null) {
+        li.append(roleIcon);
+      }
       li.append(el('span', 'member-name', member.name));
       li.append(el('span', 'report-member-role', member.role));
       li.append(el('span', 'report-member-ilvl', `装等${member.itemLevel}`));
@@ -2497,6 +2544,7 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
     }
     for (const drop of report.drops) {
       const li = el('li', 'report-drop');
+      li.append(pixelImg(iconDataUrl(QUALITY_GEM[drop.quality]), `${drop.quality}品质宝石`, 'pixel-art icon-gem'));
       li.append(el('span', `gear-quality ${QUALITY_CLASS[drop.quality]}`, drop.quality));
       li.append(el('span', 'report-drop-item', `${drop.slot} · 装等 ${drop.itemLevel}`));
       li.append(
@@ -3081,6 +3129,7 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
 
     const row = el('li', 'bench-row');
     row.dataset.memberId = String(member.id);
+    row.append(pixelImg(portraitDataUrl(member.classId), `${cls?.name ?? '未知'}职业肖像`, 'pixel-art portrait-xs'));
     const info = el('div', 'bench-info');
     const nameSpan = el('span', 'member-name', member.name);
     if (member.isChairman) {
@@ -3162,7 +3211,10 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
 
         const row = el('li', 'roster-row');
         row.dataset.memberId = String(member.id);
-        row.append(top, bottom);
+        row.append(pixelImg(portraitDataUrl(member.classId), `${cls?.name ?? '未知'}职业肖像`, 'pixel-art portrait-sm'));
+        const body = el('div', 'roster-row-body');
+        body.append(top, bottom);
+        row.append(body);
         return row;
       }),
     );
@@ -3194,6 +3246,9 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
     frag.append(topRow);
 
     const title = el('div', 'detail-title');
+    title.append(
+      pixelImg(portraitDataUrl(member.classId), `${cls?.name ?? '未知'}职业肖像`, 'pixel-art portrait-lg'),
+    );
     const nameWrap = el('h3', 'detail-name');
     nameWrap.append(el('span', 'member-name', member.name));
     if (member.isChairman) {
