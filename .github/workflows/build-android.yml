@@ -1,0 +1,67 @@
+# 安卓交付构建(T21,ADR-0001:TapTap 分发走 Capacitor)。
+#
+# 本仓 macOS 开发机没有 Android SDK / JDK(如实记录见 docs/delivery.md),
+# APK 一律经本工作流产出:web 构建 → cap sync → Gradle assemble。
+#
+# 签名:无密钥时 android/app/build.gradle 的 release 配置回退调试签名
+# (可安装、不可上商店);四个 secrets 就位后同一构建直出正式签名包:
+#   WOWIDLE_KEYSTORE_BASE64   keytool 生成的密钥库文件(base64)
+#   WOWIDLE_KEYSTORE_PASSWORD 密钥库口令
+#   WOWIDLE_KEY_ALIAS         密钥别名
+#   WOWIDLE_KEY_PASSWORD      密钥口令
+
+name: 安卓构建(Capacitor)
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  apk:
+    name: Android APK
+    runs-on: ubuntu-latest
+    # secrets 缺省时注入空串:还原密钥库一步按「非空」条件跳过,
+    # Gradle 侧 WOWIDLE_KEYSTORE_PATH 也就不会出现(回退调试签名)。
+    env:
+      WOWIDLE_KEYSTORE_BASE64: ${{ secrets.WOWIDLE_KEYSTORE_BASE64 }}
+      WOWIDLE_KEYSTORE_PASSWORD: ${{ secrets.WOWIDLE_KEYSTORE_PASSWORD }}
+      WOWIDLE_KEY_ALIAS: ${{ secrets.WOWIDLE_KEY_ALIAS }}
+      WOWIDLE_KEY_PASSWORD: ${{ secrets.WOWIDLE_KEY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: 安装 npm 依赖
+        run: npm ci
+
+      - name: Web 构建 + 同步进安卓工程
+        run: |
+          npm run build
+          npx cap sync android
+
+      - name: 还原签名密钥库(可选;缺省时 release 回退调试签名)
+        if: env.WOWIDLE_KEYSTORE_BASE64 != ''
+        run: |
+          echo "$WOWIDLE_KEYSTORE_BASE64" | base64 --decode > /tmp/wowidle-release.keystore
+          echo "WOWIDLE_KEYSTORE_PATH=/tmp/wowidle-release.keystore" >> "$GITHUB_ENV"
+
+      - name: 构建 APK(debug + release)
+        run: android/gradlew -p android assembleDebug assembleRelease
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: WowIdle-android-apk
+          path: |
+            android/app/build/outputs/apk/debug/*.apk
+            android/app/build/outputs/apk/release/*.apk

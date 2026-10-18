@@ -13,10 +13,13 @@
 - `src/content/` — 数据驱动内容（文案池、物品表等）。内容禁止硬编码进 `sim`。
 - `src/art/` — 像素美术管线（T17）：全局调色板、字符画解析、统一后处理（量化 + 描边）、零依赖 PNG 编码。纯函数、不经门面（不是游戏本体）；风格契约见 `docs/art-style.md`，资产授权台账见 `docs/art-licenses.md`。
 - `src/ui/` — 状态之上的薄渲染层：禁止业务规则、禁止在此换算或推进游戏时间（`app.ts` 全窗五页签、`widget.ts` 小组件卡）。布局竖屏优先；横屏/宽窗双栏（左名册 + 右详情）由 `app.css` 末尾的媒体查询从竖屏规则派生（T20），渲染逻辑不感知方向、无第二套 UI 逻辑；小组件页不加载 `app.css`。
-- `src/shell/` — 装配层共享设施（T19）：`runtime.ts` 模拟运行时（门面 + 自动存档 + 现实时钟滴答 + 离线补结算，`start/stop` 幂等供属主切换）；`ownership.ts` 模拟属主仲裁的页内侧；`tauri.ts` 桌面壳桥（零 npm 依赖，走 `window.__TAURI__` 注入）；`widget-window.ts` / `widget-geometry.ts` 小组件窗口几何（贴角吸附 / 记忆，纯数学可直测）。
+- `src/shell/` — 装配层共享设施（T19）：`runtime.ts` 模拟运行时（门面 + 自动存档 + 现实时钟滴答 + 离线补结算，`start/stop` 幂等供属主切换）；`ownership.ts` 模拟属主仲裁的页内侧；`tauri.ts` 桌面壳桥（零 npm 依赖，走 `window.__TAURI__` 注入；T21 起含存档文件桥）；`save-sync.ts` 存档双介质回灌的纯裁决（T21，可直测）；`widget-window.ts` / `widget-geometry.ts` 小组件窗口几何（贴角吸附 / 记忆，纯数学可直测）。
 - `src/main.ts` / `src/widget-main.ts` — 两个装配入口：全窗（竖屏应用）与小组件窗。现实时间只出现在装配层（`main.ts` + `shell/` + `widget-main.ts`），把现实时间增量换算为游戏时间增量；桌面壳内两窗经属主仲裁，同一时刻只有一窗推进模拟。
-- `src-tauri/` — Tauri v2 桌面壳（T19，macOS 形态）：小组件窗（无边框、置顶、透明、可调）+ 按需全窗 + 模拟属主仲裁（`wn:owner` 事件 / `sim_owner` 命令）。壳内无游戏规则；运行需 Rust 工具链，见 `src-tauri/README.md`（Windows 交叉构建与打包属 T21）。
-- `scripts/` — 开发期工具（如 `gen-art.ts` 样张生成，`npm run gen:art`；`gen-app-icon.ts` 桌面图标生成，`npm run gen:icon`；`sim-round.ts` 一轮节奏模拟，`npm run sim:round [种子] [最大周]`）。
+- `src-tauri/` — Tauri v2 桌面壳（T19，macOS 形态）：小组件窗（无边框、置顶、透明、可调）+ 按需全窗 + 模拟属主仲裁（`wn:owner` 事件 / `sim_owner` 命令）+ 存档文件桥命令（T21，`wowidle-save.json` 原子写）。壳内无游戏规则；运行需 Rust 工具链，见 `src-tauri/README.md`（Windows NSIS 与 Steam 交付走 CI，见 `docs/delivery.md`）。
+- `android/` — Capacitor 安卓工程（T21，TapTap 分发）：web 代码零 `@capacitor/*` 运行时依赖，WebView 直载 `dist/index.html`；配置在根 `capacitor.config.ts`；APK 构建与发布签名走 CI，见 `docs/delivery.md` §3。
+- `store/` — 商店页素材（T21）：Steam/TapTap 文案（`*/page-zh.md`）、胶囊图与图标（`npm run gen:store` 再生）、真实游戏截图（`screenshots/`，由 `npm run sim:dump` 演示存档注入截得）；本地产物目录 `store/desktop/` 不入库。
+- `.github/workflows/` — 交付 CI（T21）：`build-desktop.yml`（Windows NSIS + macOS 复现）、`build-android.yml`（debug/release APK，密钥 secrets 就位后直出正式签名）。
+- `scripts/` — 开发期工具（如 `gen-art.ts` 样张生成，`npm run gen:art`；`gen-app-icon.ts` 桌面图标、`gen-store-art.ts` 商店素材，`npm run gen:icon` / `gen:store`；`sim-round.ts` 一轮节奏模拟，`npm run sim:round [种子] [最大周]`；`dump-save.ts` 演示存档导出，`npm run sim:dump [周数] [路径]`）。
 - `index.html` / `widget.html` / `vite.config.ts` / `vitest.config.ts` — 全窗与小组件两页入口、构建（多页 rollupOptions.input）与测试配置。
 
 ### 如何测试
@@ -45,6 +48,12 @@ cargo tauri dev   # 或 npm i -D @tauri-apps/cli && npm run tauri dev
 ```
 
 壳的形态与属主仲裁见 `src-tauri/README.md`；浏览器开发时小组件页直接开 `/widget.html` 观感（无窗口形态，按标签页可见性起停）。
+
+> 本机装 Rust 工具链走独立分发包、不经 rustup（保护层会打断 rustup 的下载换名）；DMG 装帧用素面 hdiutil。命令与原因见 `docs/delivery.md` §1。
+
+### 交付打包（T21：Steam(Win) + TapTap(Android)）
+
+macOS 桌面本机构建（`npx tauri build`）；Windows NSIS 与 Android APK 走 `.github/workflows/` 两条 CI（本机无 MSVC/JDK/Android SDK，如实标注）；商店素材在 `store/`。全部路径、验证记录与缺口清单见 `docs/delivery.md`。
 
 ### 代码约定
 

@@ -1,0 +1,85 @@
+# 桌面交付构建(T21,ADR-0001:Steam 分发走 Tauri)。
+#
+# · windows:出 NSIS 安装器(Steam 上传的原始产物;本仓 macOS 开发机
+#   无法本地交叉编译 MSVC,Windows 构建一律走本作业 —— 见 docs/delivery.md)。
+# · macos:与本机手工构建同配方出 .app + .dmg,证明 CI 可复现桌面产物。
+#
+# 触发:手动(workflow_dispatch)或打 tag(v*)。Steam 后续上传
+# (steamcmd + depot 构建)需要 Partner 账号凭据,属商店运营步骤,
+# 见 docs/delivery.md 的「Steam 交付缺口」一节,不在本工作流内。
+
+name: 桌面构建(Tauri)
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  windows:
+    name: Windows NSIS 安装器
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: 安装 npm 依赖
+        run: npm ci
+
+      # --bundles nsis 覆盖 tauri.conf.json 里面向 macOS 的 targets(app/dmg)
+      - name: 构建 Windows NSIS 安装器
+        run: npx tauri build --bundles nsis
+
+      - name: 收集产物
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+          Copy-Item "src-tauri/target/release/*.exe" artifacts/ -ErrorAction SilentlyContinue
+          Copy-Item "src-tauri/target/release/bundle/nsis/*.exe" artifacts/ -ErrorAction SilentlyContinue
+          Get-ChildItem artifacts
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: WowIdle-windows-x64
+          path: artifacts/
+
+  macos:
+    name: macOS 应用与 DMG
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: 安装 npm 依赖
+        run: npm ci
+
+      - name: 构建 macOS .app 与 .dmg
+        run: npx tauri build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: WowIdle-macos
+          path: |
+            src-tauri/target/release/bundle/macos/*.app
+            src-tauri/target/release/bundle/dmg/*.dmg

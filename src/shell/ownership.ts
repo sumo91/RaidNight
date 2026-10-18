@@ -59,15 +59,17 @@ export function runUnderOwnership(
     return () => document.removeEventListener('visibilitychange', sync);
   }
 
-  // 桌面壳:先补问一次(事件可能早于本脚本就绪),再常听广播
-  void querySimOwner().then((owner) => {
+  // 桌面壳:先回灌桌面存档文件(T21,起表前完成 —— 文件是权威副本,
+  // 裁决见 shell/save-sync),再补问一次属主(事件可能早于本脚本就绪
+  // 发出),最后常听广播;串行化保证 start() 一定读得到回灌后的存档。
+  let unlisten: (() => void) | undefined;
+  void (async () => {
+    await runtime.hydrateFromDisk();
+    const owner = await querySimOwner();
     if (owner !== undefined) {
       apply(owner);
     }
-  });
-  let unlisten: (() => void) | undefined;
-  void listenSimOwner((owner) => apply(owner)).then((fn) => {
-    unlisten = fn;
-  });
+    unlisten = await listenSimOwner(apply);
+  })();
   return () => unlisten?.();
 }

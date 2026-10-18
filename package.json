@@ -12,9 +12,17 @@
     "test:watch": "vitest --configLoader runner",
     "gen:art": "vite-node --configLoader runner scripts/gen-art.ts",
     "gen:icon": "vite-node --configLoader runner scripts/gen-app-icon.ts",
-    "sim:round": "vite-node --configLoader runner scripts/sim-round.ts"
+    "sim:round": "vite-node --configLoader runner scripts/sim-round.ts",
+    "gen:store": "vite-node --configLoader runner scripts/gen-store-art.ts",
+    "android:sync": "npm run build && cap sync android",
+    "android:apk": "android/gradlew -p android assembleDebug",
+    "sim:dump": "vite-node --configLoader runner scripts/dump-save.ts"
   },
   "devDependencies": {
+    "@capacitor/android": "^8.5.3",
+    "@capacitor/cli": "^8.5.3",
+    "@capacitor/core": "^8.5.3",
+    "@tauri-apps/cli": "^2.12.3",
     "@types/node": "^26.6.5",
     "typescript": "^5.9.3",
     "vite": "^7.1.12",

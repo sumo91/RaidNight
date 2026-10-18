@@ -15,83 +15,16 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { encodePng } from '../src/art/png';
-import { postProcess } from '../src/art/post';
-import { parseSpriteRows, scaleNearest } from '../src/art/grid';
+import { scaleNearest } from '../src/art/grid';
+import { buildAppIconGrid, ICON_SIZE } from './lib/icon-grid';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const outDir = resolve(repoRoot, 'src-tauri/icons');
 
-// ———— 图形:32×32 字符画,公会盾徽(暗紫外底 + 鎏金盾 + 绯红宝珠)————
+// ———— 图形:32×32 字符画经 scripts/lib/icon-grid.ts 定义(与商店素材同源)————
 
-const SIZE = 32;
-
-/** 圆角方形画布(透明外角,近似 macOS 图标的 squircle)。 */
-function backgroundInside(x: number, y: number): boolean {
-  const min = 4;
-  const max = 27;
-  if (x < min || x > max || y < min || y > max) {
-    return false;
-  }
-  const corners = [
-    (x - min) + (y - min),
-    (max - x) + (y - min),
-    (x - min) + (max - y),
-    (max - x) + (max - y),
-  ];
-  return corners.every((sum) => sum >= 4);
-}
-
-/** 盾形:上半矩形、下半收尖;返回该点是否在盾内。 */
-function shieldInside(x: number, y: number): boolean {
-  const cx = 15.5;
-  const top = 6;
-  const bottom = 26;
-  if (y < top || y > bottom) {
-    return false;
-  }
-  const halfWidth = y <= 19 ? 7.5 : Math.max(1.5, 7.5 - (y - 19) * 1.5);
-  return Math.abs(x - cx) <= halfWidth;
-}
-
-function buildIconRows(): string[] {
-  const rows: string[] = [];
-  for (let y = 0; y < SIZE; y += 1) {
-    let row = '';
-    for (let x = 0; x < SIZE; x += 1) {
-      if (!backgroundInside(x, y)) {
-        row += '.';
-        continue;
-      }
-      if (shieldInside(x, y)) {
-        const border =
-          !shieldInside(x - 1, y) ||
-          !shieldInside(x + 1, y) ||
-          !shieldInside(x, y - 1) ||
-          !shieldInside(x, y + 1);
-        if (border) {
-          row += 'y'; // 鎏金盾边
-          continue;
-        }
-        // 中央宝珠:菱形绯红 + 亮金衬
-        const dx = Math.abs(x - 15.5);
-        const dy = Math.abs(y - 15.5);
-        if (dx + dy < 2) {
-          row += 'r';
-        } else if (dx + dy < 4) {
-          row += 'Y';
-        } else {
-          row += 'K'; // 岩灰盾面
-        }
-        continue;
-      }
-      row += 'k'; // 玄墨底
-    }
-    rows.push(row);
-  }
-  return rows;
-}
-
-const baseGrid = postProcess(parseSpriteRows(buildIconRows(), 'app-icon'));
+const SIZE = ICON_SIZE;
+const baseGrid = buildAppIconGrid();
 
 /** 放大到目标尺寸并编码 PNG(最近邻,像素风)。 */
 function pngAt(size: number): Uint8Array {

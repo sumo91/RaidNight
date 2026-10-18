@@ -9,6 +9,12 @@
  * 同一时刻只允许一个在走(属主裁决见 shell/ownership.ts):start() 载入
  * 本机最新存档并按落盘时间戳做离线补结算(ADR-0003:基于时间戳推进、
  * 幂等),stop() 停表落盘 —— 交还/接管不丢进度、不双推进。
+ *
+ * 桌面端存档双介质(T21,ADR-0003「存档为本地文件」):localStorage
+ * 之外每次落盘都把同一份版本化 JSON 镜像到应用数据目录的本地文件
+ * (经 shell/tauri.ts 文件桥,壳侧原子写);起表前 hydrateFromDisk()
+ * 按时间戳把文件档回灌 —— 文件是权威副本(强退不丢)与 Steam
+ * Auto-Cloud 的同步面,裁决规则见 shell/save-sync.ts。
  */
 
 import { GAME_MINUTES_PER_REAL_MS, GAME_MINUTES_PER_WEEK, realMsToGameMinutes } from '../sim/clock';
@@ -16,6 +22,8 @@ import { SimulationFacade, decodeSaveEnvelope, encodeSave, type StepOutput } fro
 import type { SimEvent } from '../sim/events';
 import type { SimInput } from '../sim/facade';
 import type { GameState } from '../sim/state';
+import { deleteSaveFile, mirrorSaveFile, readSaveFile, tauriAvailable } from './tauri';
+import { pickRestoreSource } from './save-sync';
 // 类型单向引用(编译期擦除,无运行时耦合):装配层产出视图数据,UI 只渲染
 import type { OfflineHarvestView } from '../ui/app';
 import { formatGameDuration, formatGameStamp, formatRealDuration } from '../ui/format';
@@ -124,6 +132,34 @@ export class SimRuntime {
     this.running = false;
   }
 
+  /**
+   * 桌面存档文件回灌(T21,只应在起表前调用一次):
+   * 读桌面本地文件(ADR-0003 权威副本),按 save-sync 的裁决规则
+   * 写回 localStorage —— 之后 start() 走既有路径。浏览器(无 Tauri)
+   * 与壳异常时静默无操作;由属主仲裁(ownership)在桌面分支首调。
+   */
+  async hydrateFromDisk(): Promise<void> {
+    if (!tauriAvailable()) {
+      return;
+    }
+    const disk = await readSaveFile();
+    let local: string | null = null;
+    try {
+      local = localStorage.getItem(SAVE_KEY);
+    } catch {
+      local = null;
+    }
+    const restore = pickRestoreSource(local, disk);
+    if (restore === null) {
+      return;
+    }
+    try {
+      localStorage.setItem(SAVE_KEY, restore);
+    } catch {
+      // localStorage 写不进:本局 start() 将看不到文件档(下次壳写入重试)
+    }
+  }
+
   /** 会长指令(装配层转发给门面):结算 + 落盘;渲染由入口用返回值完成。 */
   dispatch(input: SimInput): StepOutput {
     const output = this.facade.dispatch(input);
@@ -158,13 +194,14 @@ export class SimRuntime {
     return encodeSave(this.facade.state, Date.now());
   }
 
-  /** 清空本机存档(入口随后自行重开页面)。 */
+  /** 清空本机存档(入口随后自行重开页面);桌面端连同文件权威副本一起清。 */
   wipeStorage(): void {
     try {
       localStorage.removeItem(SAVE_KEY);
     } catch {
       // 清不掉也无妨:重载后会被覆盖写
     }
+    void deleteSaveFile();
   }
 
   /** 现实时间 → 游戏时间增量:增量取整并保留余数进位,保证确定性不受浮点影响。 */
@@ -182,13 +219,19 @@ export class SimRuntime {
     this.callbacks.onOutput(output.state, output.events);
   }
 
-  /** 写入本机存档(封皮带落盘时刻,离线结算的起测点);存储不可用时静默降级为本局内存态。 */
+  /**
+   * 写入本机存档(封皮带落盘时刻,离线结算的起测点);存储不可用时静默降级为本局内存态。
+   * 桌面壳内双介质:localStorage(热副本)之外把同一文本镜像到本地文件
+   * (权威副本,ADR-0003;Rust 侧原子写,Steam Auto-Cloud 的同步面)。
+   */
   private persistNow(): void {
+    const text = encodeSave(this.facade.state, Date.now());
     try {
-      localStorage.setItem(SAVE_KEY, encodeSave(this.facade.state, Date.now()));
+      localStorage.setItem(SAVE_KEY, text);
     } catch {
       // 本局照常运行,只是不落盘
     }
+    void mirrorSaveFile(text);
   }
 
   /**

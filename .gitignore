@@ -2,3 +2,6 @@ node_modules/
 dist/
 *.local
 .DS_Store
+
+# T21 交付打包:本地产物不入库(构建/发布走 docs/delivery.md 的命令与 CI)
+store/desktop/

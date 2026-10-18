@@ -134,3 +134,47 @@ export async function openMainWindow(): Promise<void> {
     // 打不开(壳异常)时静默:小组件照常显示,不打扰玩家
   }
 }
+
+// ———— 桌面存档文件桥(T21,ADR-0003「存档为本地文件」)————
+// 文件 = localStorage 同款版本化 JSON 的权威镜像(壳侧原子写入);
+// 路径在 Rust 侧(SAVE_FILE_NAME),也是 Steam Auto-Cloud 的同步面。
+// 浏览器(无 Tauri)下一律优雅缺省:读 = 无档,写/删 = 无操作。
+
+/** 读桌面存档文件;浏览器 / 无档 / 壳异常一律返回 null。 */
+export async function readSaveFile(): Promise<string | null> {
+  const tauri = getTauri();
+  if (tauri === undefined) {
+    return null;
+  }
+  try {
+    return await tauri.core.invoke<string | null>('read_save_file');
+  } catch {
+    return null;
+  }
+}
+
+/** 镜像存档文本到桌面本地文件(每次落盘调用;失败静默,localStorage 仍在)。 */
+export async function mirrorSaveFile(content: string): Promise<void> {
+  const tauri = getTauri();
+  if (tauri === undefined) {
+    return;
+  }
+  try {
+    await tauri.core.invoke('write_save_file', { content });
+  } catch {
+    // 写不进文件(壳异常/磁盘满):本局照常,localStorage 仍是近期副本
+  }
+}
+
+/** 删除桌面存档文件(清档重开用;失败静默,重开后的首笔落盘会覆盖它)。 */
+export async function deleteSaveFile(): Promise<void> {
+  const tauri = getTauri();
+  if (tauri === undefined) {
+    return;
+  }
+  try {
+    await tauri.core.invoke('delete_save_file');
+  } catch {
+    // 同上:清不掉的旧文件会在下一笔落盘时被覆盖
+  }
+}

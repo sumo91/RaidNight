@@ -13,14 +13,66 @@
 //! 否则小组件常驻推进。切换时广播 wn:owner 事件(载荷 0/1),页面冷加载
 //! 可用 sim_owner 命令补问。两页共享同一 localStorage 存档,交还时停表
 //! 落盘、接管时按存档时间戳补结算(幂等,ADR-0003),绝不双推进。
+//!
+//! 存档本地持久(T21,ADR-0003「存档为本地文件」):页面每次落盘除
+//! localStorage 外,经 write_save_file 把同一份版本化 JSON 镜像到应用
+//! 数据目录(WKWebView 的 localStorage 有强退丢尾风险,文件是权威副本);
+//! 冷启动 hydrate 时读回。该文件路径也是 Steam Auto-Cloud 的同步面
+//! (Steamworks 侧零代码,商店后台按路径配置即可)。
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::fs;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU8, Ordering};
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 
 /// 模拟属主:0 = 小组件窗,1 = 全窗。
 static SIM_OWNER: AtomicU8 = AtomicU8::new(0);
+
+/// 桌面存档文件名(与 shell/save-sync.ts 的 SAVE_FILE_NAME 保持一致;
+/// 内容 = localStorage 同款版本化 JSON,sim/save.ts 的编码格式)。
+const SAVE_FILE_NAME: &str = "wowidle-save.json";
+
+/// 存档文件的绝对路径(应用数据目录,如 macOS 的
+/// ~/Library/Application Support/dev.raidnight.wowidle/)。取不到目录时 None。
+fn save_file_path(app: &AppHandle) -> Option<PathBuf> {
+    app.path().app_data_dir().ok().map(|dir| dir.join(SAVE_FILE_NAME))
+}
+
+/// 读桌面存档文件;不存在返回 None,读失败同样按无档处理(页面回退 localStorage)。
+#[tauri::command]
+fn read_save_file(app: AppHandle) -> Option<String> {
+    let path = save_file_path(&app)?;
+    fs::read_to_string(path).ok()
+}
+
+/// 镜像存档到本地文件(每次落盘调用;Rust 侧同步写,尽快把数据推到磁盘)。
+#[tauri::command]
+fn write_save_file(app: AppHandle, content: String) -> Result<(), String> {
+    let path = save_file_path(&app).ok_or_else(|| "取不到应用数据目录".to_string())?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    // 先写临时文件再原子换名:进程中途被杀也不会留下半个 JSON
+    let tmp = path.with_extension("json.tmp");
+    fs::write(&tmp, content).map_err(|e| e.to_string())?;
+    fs::rename(&tmp, &path).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// 删除桌面存档文件(清档重开;文件不存在也算成功)。
+#[tauri::command]
+fn delete_save_file(app: AppHandle) -> Result<(), String> {
+    let Some(path) = save_file_path(&app) else {
+        return Ok(());
+    };
+    match fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e.to_string()),
+    }
+}
 
 /// 属主切换广播事件名(页内监听见 shell/tauri.ts)。 */
 const OWNER_EVENT: &str = "wn:owner";
@@ -85,7 +137,13 @@ fn main() {
                 .build()?;
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![sim_owner, open_main_window])
+        .invoke_handler(tauri::generate_handler![
+            sim_owner,
+            open_main_window,
+            read_save_file,
+            write_save_file,
+            delete_save_file
+        ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 match window.label() {
