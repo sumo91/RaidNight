@@ -5,6 +5,7 @@ import { generateApplicantPool } from './recruit';
 import { createServerWorld } from './world';
 import { DEFAULT_LOOT_SYSTEM, VAULT, type LootSystemId } from '../content/economy';
 import { RECRUIT } from '../content/recruit';
+import type { WeeklyGoalId } from '../content/plan';
 import type { DepartureReason } from '../content/reputation';
 import type { GearSlot, Quality } from '../content/gear';
 import type { ConsumableTierId, RaidStanceId, WorldBuffId } from '../content/raid-tactics';
@@ -210,9 +211,25 @@ export interface RaidTactics {
 }
 
 /**
+ * 周计划(计划层,T15,GLOSSARY:计划层 = 会长定期设定目标与开团安排的轻决策层):
+ * 常驻的每周团本夜安排与当周目标 —— 自动层每周照此开团,直到会长更改或取消,
+ * 会长不操作时公会照常运转。与单周开团安排(raidPlan)的关系:计划决定「每周
+ * 自动开哪本、按什么目标打」;本周已手动开团的不被计划覆盖,夜结束照常清空。
+ */
+export interface WeeklyPlan {
+  /** 当周目标(content/plan 数据驱动;改目标即时生效,含本周已开的团本夜)。 */
+  readonly goal: WeeklyGoalId;
+  /** 每周团本夜所开团本(后续多本团本时可扩为轮换表)。 */
+  readonly raidId: string;
+  /** 计划设定时刻(游戏分钟;展示用)。 */
+  readonly setAtGameMinutes: number;
+}
+
+/**
  * 开团安排(计划层):已开团的团本。
  * 团本夜 = 下一个游戏周边界(团本 CD = 游戏周,DESIGN):门面在跨过
- * 周边界时按首领顺序整夜结算,夜结束安排即清空(下周重新开团)。
+ * 周边界时按首领顺序整夜结算,夜结束安排即清空(下周重新开团 ——
+ * 有周计划时由自动层照计划重开,T15)。
  */
 export interface RaidPlan {
   readonly raidId: string;
@@ -303,6 +320,8 @@ export interface RaidNightReport {
   readonly wipe?: RaidWipe;
   /** 本夜修理金合计(实付;全通为 0)。 */
   readonly repairGold: number;
+  /** 本夜适用的当周目标(T15,计划层;无周计划的夜为 undefined)。 */
+  readonly goal?: { readonly id: WeeklyGoalId; readonly name: string };
   /** 本夜分配结算摘要(T11:双钱包流向与制度代价;夜被取消时无报告)。 */
   readonly loot?: RaidLootFlow;
   /** 本夜赛前决策的生效快照(T14;未做任何决策时为 undefined)。 */
@@ -524,6 +543,8 @@ export interface GameState {
   readonly economy: GuildEconomy;
   /** 当前开团安排(缺省 = 本周未开团;团本夜 = 下一个游戏周边界)。 */
   readonly raidPlan?: RaidPlan;
+  /** 周计划(计划层,T15;缺省 = 无常驻计划,每周需手动开团)。 */
+  readonly weeklyPlan?: WeeklyPlan;
   /** 最近一次团本夜的结算报告(结构化;过程见事件日志的「团本」条目) */
   readonly lastRaidNight?: RaidNightReport;
   /** 荣誉墙(T12):首杀徽章 / 里程碑 / 稀有陈列。 */
@@ -567,6 +588,7 @@ export function createInitialState(seed: number, guildName?: string): GameState 
     vault: { gold: VAULT.startingGold, repairSpent: 0, incomeTotal: 0 },
     economy: createInitialEconomy(0),
     raidPlan: undefined,
+    weeklyPlan: undefined,
     lastRaidNight: undefined,
     honorWall: createEmptyHonorWall(),
     hallOfFame: [],

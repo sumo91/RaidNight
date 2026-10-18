@@ -21,6 +21,7 @@
  */
 
 import { RAID_BY_ID, RAID_DROP_QUALITY, RAID_SETTLEMENT, RAIDS, type RaidDef } from '../content/raids';
+import type { WeeklyGoalDef } from '../content/plan';
 import {
   CONSUMABLE_TIER_BY_ID,
   DEFAULT_RAID_STANCE,
@@ -313,6 +314,12 @@ export interface SettleRaidNightParams {
    * 扫货 → 修理材料涨价;幅度见 content/world,到期回落 —— 幅度轻、不锁内容)。
    */
   readonly repairCostFactor?: number;
+  /**
+   * 当周目标(T15,计划层;state.weeklyPlan 的解析结果,自动/手动开团一律适用):
+   * 数值钩子见 content/plan —— 夜末出席者心态调整、farm 卖店、带新分配倾斜。
+   * 缺省(undefined = 无周计划)= 全部钩子不生效,行为与 T14 完全一致。
+   */
+  readonly goal?: WeeklyGoalDef;
   readonly emit: (text: string) => void;
 }
 
@@ -502,6 +509,8 @@ export function settleRaidNight(params: SettleRaidNightParams): SettleRaidNightR
           system,
           selfDealing: params.economy.selfDealing,
           vault: currentVault,
+          salvageGoldPerDrop: params.goal?.salvageGoldPerDrop,
+          lootTilt: params.goal?.lootTilt,
         });
         members = allocation.members;
         currentVault = allocation.vault;
@@ -615,6 +624,32 @@ export function settleRaidNight(params: SettleRaidNightParams): SettleRaidNightR
     emit(`自肥 ${nightSelfDealt} 件:出席者忠诚逐件受损,声望 −${reputationCostTotal}(代价累积可见)。`);
   }
 
+  // 当周目标的心态钩子(T15,计划层):在制度心态之上叠加(钳制 0-100;
+  // 忠诚与制度同款 —— 会长角色不随目标波动,且只波及出席者)
+  const goal = params.goal;
+  if (goal !== undefined && (goal.attendeeMoodPerNight !== 0 || goal.attendeeLoyaltyPerNight !== 0)) {
+    members = members.map((member) => {
+      if (!teamIds.has(member.id)) {
+        return member;
+      }
+      return {
+        ...member,
+        loyalty: member.isChairman
+          ? member.loyalty
+          : Math.max(0, Math.min(100, member.loyalty + goal.attendeeLoyaltyPerNight)),
+        mood: Math.max(0, Math.min(100, member.mood + goal.attendeeMoodPerNight)),
+      };
+    });
+    const goalParts: string[] = [];
+    if (goal.attendeeLoyaltyPerNight !== 0) {
+      goalParts.push(`出席者忠诚 ${signed(goal.attendeeLoyaltyPerNight)}`);
+    }
+    if (goal.attendeeMoodPerNight !== 0) {
+      goalParts.push(`心情 ${signed(goal.attendeeMoodPerNight)}`);
+    }
+    emit(`周目标「${goal.name}」:${goalParts.join('、')}。`);
+  }
+
   const report: RaidNightReport = {
     raidId: raid.id,
     raidName: raid.name,
@@ -638,6 +673,7 @@ export function settleRaidNight(params: SettleRaidNightParams): SettleRaidNightR
         }
       : undefined,
     repairGold: repairGoldTotal,
+    goal: goal !== undefined ? { id: goal.id, name: goal.name } : undefined,
     loot: {
       system: system.id,
       vaultGoldIn,

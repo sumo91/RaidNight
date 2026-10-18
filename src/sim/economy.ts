@@ -23,10 +23,11 @@ import {
   type ExternalActivityId,
   type LootSystemDef,
 } from '../content/economy';
+import type { WeeklyLootTilt } from '../content/plan';
 import { LEVELING } from '../content/maps';
 import { evaluateUnlockGates } from './ladder';
 import { squadDungeonReadiness, bestWearer, equipItem, type DroppedItem } from './dungeon';
-import { guildAverageItemLevel, guildAverageLevel } from './roster';
+import { averageItemLevel, guildAverageItemLevel, guildAverageLevel } from './roster';
 import type { GuildVault, Member, Squad } from './state';
 
 /** 外快活动解锁状态(派生量:随公会平均等级与平均装等即时变化;UI 锁定文案共用)。 */
@@ -107,6 +108,16 @@ export interface DistributeRaidDropParams {
   /** 会长裁量制下的自肥开关(他制忽略)。 */
   readonly selfDealing: boolean;
   readonly vault: GuildVault;
+  /**
+   * 周计划钩子(T15):无人可提升的掉落卖店所得/件(> 0 时不分解、收入进金库;
+   * farm 目标)。缺省 0 = 照旧分解不给钱。
+   */
+  readonly salvageGoldPerDrop?: number;
+  /**
+   * 周计划钩子(T15):会长裁量制下的分配倾斜(带新目标 = 装等最低的可提升者
+   * 优先)。制度(DKP/GKP)面前人人平等,不倾斜。缺省 'none'。
+   */
+  readonly lootTilt?: WeeklyLootTilt;
 }
 
 /** 团本掉落分配结果:新状态 + 去向记录 + 结算文本(经门面入「团本」事件流)。 */
@@ -155,8 +166,25 @@ export function distributeRaidDrop(params: DistributeRaidDropParams): RaidDropAl
   const label = `${item.quality}·${item.slot}(装等 ${item.itemLevel})`;
   const teamIds = new Set(team.map((member) => member.id));
   const candidates = team.filter((member) => upgradeDeltaOf(member, item) > 0);
+  const salvageGold = params.salvageGoldPerDrop ?? 0;
 
   if (candidates.length === 0) {
+    // 周计划「farm」钩子:无人可提升的掉落卖店换金库收入;缺省照旧分解
+    if (salvageGold > 0) {
+      const vaultAfter: GuildVault = {
+        gold: vault.gold + salvageGold,
+        repairSpent: vault.repairSpent,
+        incomeTotal: vault.incomeTotal + salvageGold,
+      };
+      return {
+        members: params.members,
+        vault: vaultAfter,
+        selfDealt: false,
+        reputationCost: 0,
+        outcome: { equipped: false },
+        line: `团本掉落:${label} 无人可提升,卖店 +${salvageGold} 金入金库(farm 周)。`,
+      };
+    }
     return {
       members: params.members,
       vault,
@@ -279,7 +307,20 @@ export function distributeRaidDrop(params: DistributeRaidDropParams): RaidDropAl
     };
   }
 
-  const fair = bestWearer(candidates, item);
+  // 周计划「带新」钩子:裁量制的「合理分配」改取装等最低的可提升者
+  // (装备往新人身上带;并列取阵容靠前者)。制度(DKP/GKP)不倾斜。
+  const fair =
+    params.lootTilt === 'lowestItemLevel'
+      ? (() => {
+          let best = candidates[0] as Member;
+          for (const member of candidates) {
+            if (averageItemLevel(member) < averageItemLevel(best)) {
+              best = member;
+            }
+          }
+          return { member: best, delta: upgradeDeltaOf(best, item) };
+        })()
+      : bestWearer(candidates, item);
   const members = params.members.map((member) =>
     member.id === fair.member.id ? equipItem(member, item) : member,
   );
@@ -289,7 +330,10 @@ export function distributeRaidDrop(params: DistributeRaidDropParams): RaidDropAl
     selfDealt: false,
     reputationCost: 0,
     outcome: { equipped: true, assignedTo: fair.member.name, upgradeDelta: fair.delta },
-    line: `团本掉落:${label} → ${fair.member.name} 换上(+${fair.delta};会长裁量)。`,
+    line:
+      params.lootTilt === 'lowestItemLevel'
+        ? `团本掉落:${label} → ${fair.member.name} 换上(+${fair.delta};带新:装等最低者优先)。`
+        : `团本掉落:${label} → ${fair.member.name} 换上(+${fair.delta};会长裁量)。`,
   };
 }
 

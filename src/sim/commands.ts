@@ -5,6 +5,7 @@
  */
 
 import type { LootSystemId } from '../content/economy';
+import type { WeeklyGoalId } from '../content/plan';
 import type { ConsumableTierId, RaidStanceId, WorldBuffId } from '../content/raid-tactics';
 
 export type GuildCommand =
@@ -60,6 +61,14 @@ export type GuildCommand =
    * 未开团/未知阵形/同阵形重复由门面忽略。
    */
   | { readonly type: 'setRaidStance'; readonly stance: RaidStanceId }
+  /**
+   * 设定周计划(计划层,T15:每周团本夜安排 + 当周目标)。
+   * 常驻模板:自动层每周照此开团;本周尚未开团时设定即照计划开团
+   * (本周已手动开团的不被覆盖)。未知目标/未知团本由门面忽略。
+   */
+  | { readonly type: 'setWeeklyPlan'; readonly goal: WeeklyGoalId; readonly raidId: string }
+  /** 取消周计划(此后每周团本夜需手动开团;本周已开的团不受影响) */
+  | { readonly type: 'clearWeeklyPlan' }
   /** 更换分配制度(GLOSSARY:三选一可更换有转换成本;成本不足/制度相同由门面忽略) */
   | { readonly type: 'setLootSystem'; readonly system: LootSystemId }
   /** 开关自肥(仅会长裁量制下生效;GLOSSARY:自肥) */

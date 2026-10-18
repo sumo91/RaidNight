@@ -40,8 +40,11 @@ export const SAVE_KIND = 'wowidle-save';
  * - v10(T14):开荒决策面 —— 开团安排 raidPlan 新增可缺省的赛前决策
  *   tactics(消耗品预算档 / 已启用的世界 Buff / 编成微调阵形),团本夜报告
  *   lastRaidNight 同步可带生效快照;全部可缺省,旧档不迁移即兼容。
+ * - v11(T15):计划层 —— 状态新增可缺省的周计划 weeklyPlan(每周团本夜
+ *   安排 + 当周目标),团本夜报告可带当周目标快照(goal);全部可缺省,
+ *   旧档不迁移即兼容(无计划 = 每周手动开团,与 T14 行为一致)。
  */
-export const SAVE_VERSION = 10;
+export const SAVE_VERSION = 11;
 
 /** 版本化存档封皮:v1–v3 的本机旧档没有 kind,读入时视为 legacy。 */
 export interface SaveFile {
@@ -153,6 +156,8 @@ const MIGRATIONS: Readonly<Record<number, Migration>> = {
   }),
   // v9 → v10:开荒决策面(tactics 全部可缺省,旧档即兼容;恒等迁移仅记版次)
   9: (state) => state,
+  // v10 → v11:计划层(weeklyPlan 与报告 goal 全部可缺省,旧档即兼容;恒等迁移仅记版次)
+  10: (state) => state,
 };
 
 /** 编码:状态 → 存档文本(localStorage 值与导出文件内容共用)。 */

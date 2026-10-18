@@ -9,6 +9,12 @@ import {
 } from '../content/economy';
 import type { Quality } from '../content/gear';
 import { LEVELING } from '../content/maps';
+import {
+  DEFAULT_WEEKLY_GOAL,
+  WEEKLY_GOALS,
+  WEEKLY_GOAL_BY_ID,
+  type WeeklyGoalId,
+} from '../content/plan';
 import { RAID_BY_ID, RAID_SETTLEMENT } from '../content/raids';
 import {
   CONSUMABLE_TIERS,
@@ -164,6 +170,13 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
       </section>
       <section class="pane" data-pane="schedule" hidden>
         <div class="offline-harvest" data-ref="offline-harvest" hidden></div>
+        <div class="weekly-plan">
+          <div class="pool-head">
+            <h2 class="section-title">每周计划</h2>
+            <span class="pool-sub" data-ref="weekly-plan-sub"></span>
+          </div>
+          <div class="weekly-plan-card" data-ref="weekly-plan-card"></div>
+        </div>
         <div class="raid-night">
           <div class="pool-head">
             <h2 class="section-title">团本夜</h2>
@@ -324,6 +337,8 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
   const raidNightSubEl = requireElement<HTMLSpanElement>(root, 'raid-night-sub');
   const raidPlanEl = requireElement<HTMLDivElement>(root, 'raid-plan');
   const raidLiveWrapEl = requireElement<HTMLDivElement>(root, 'raid-live-wrap');
+  const weeklyPlanSubEl = requireElement<HTMLSpanElement>(root, 'weekly-plan-sub');
+  const weeklyPlanCardEl = requireElement<HTMLDivElement>(root, 'weekly-plan-card');
   const squadCapEl = requireElement<HTMLSpanElement>(root, 'squad-cap');
   const squadListEl = requireElement<HTMLUListElement>(root, 'squad-list');
   const benchSubEl = requireElement<HTMLSpanElement>(root, 'bench-sub');
@@ -696,6 +711,49 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
     }
   });
 
+  // 每周计划操作(T15,日程页):转交门面裁决 —— 门槛与团队检查的暂缓判定
+  // 一律在 sim;此处只做展示性禁用。点目标或点团本都提交完整计划
+  //(另一维取当前计划或缺省值),没有计划时点任一选项即建立计划。
+  weeklyPlanCardEl.addEventListener('click', (event) => {
+    const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-action]');
+    if (button === null || button.disabled) {
+      return;
+    }
+    if (button.dataset.action === 'clear-plan') {
+      if (window.confirm('取消周计划?此后团本夜需手动开团;本周已开的团不受影响。')) {
+        options.dispatch({ command: { type: 'clearWeeklyPlan' }, deltaGameMinutes: 0 });
+      }
+      return;
+    }
+    const state = latestState;
+    if (state === null) {
+      return;
+    }
+    if (button.dataset.action === 'set-plan-goal' && button.dataset.goal !== undefined) {
+      const raidId = state.weeklyPlan?.raidId ?? firstUnlockedRaidId(state);
+      if (raidId === undefined) {
+        return;
+      }
+      options.dispatch({
+        command: {
+          type: 'setWeeklyPlan',
+          goal: button.dataset.goal as WeeklyGoalId,
+          raidId,
+        },
+        deltaGameMinutes: 0,
+      });
+    } else if (button.dataset.action === 'set-plan-raid' && button.dataset.raidId !== undefined) {
+      options.dispatch({
+        command: {
+          type: 'setWeeklyPlan',
+          goal: state.weeklyPlan?.goal ?? DEFAULT_WEEKLY_GOAL,
+          raidId: button.dataset.raidId,
+        },
+        deltaGameMinutes: 0,
+      });
+    }
+  });
+
   // 申请池操作:只是把「招入/拒绝」转交给门面裁决(规则一律在 sim;
   // 名册已满时按钮只作展示性禁用,门面仍会最终拒绝越界指令)
   poolListEl.addEventListener('click', (event) => {
@@ -1020,6 +1078,7 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
     const averageItemLevel = guildAverageItemLevel(state.members);
     levelingAvgEl.textContent = `公会平均等级 ${averageLevel} · 平均装等 ${averageItemLevel}`;
     renderCountdown(state);
+    renderWeeklyPlan(state);
     renderRaidNight(state);
     renderQueue(state);
     renderDungeonReport(state.lastDungeonRun);
@@ -1322,7 +1381,15 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
         el('p', 'raid-plan-hint', '赛前决策(消耗品预算 / 世界 Buff / 编成微调)在「日程」页的开荒决策面。'),
       );
     } else {
-      wrap.append(el('p', 'raid-plan-line raid-plan-idle', '本周未开团 —— 团队检查通过后即可安排团本夜。'));
+      wrap.append(
+        state.weeklyPlan === undefined
+          ? el('p', 'raid-plan-line raid-plan-idle', '本周未开团 —— 团队检查通过后即可安排团本夜。')
+          : el(
+              'p',
+              'raid-plan-line raid-plan-idle',
+              '本周未开团 —— 周计划暂缓中,条件满足后自动层照计划开团(见「日程」页)。',
+            ),
+      );
     }
 
     const list = el('ul', 'raid-list');
@@ -1424,6 +1491,116 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
   let raidBossGateEl: HTMLSpanElement | null = null;
   let raidLogEl: HTMLUListElement | null = null;
   let raidSummaryEl: HTMLDivElement | null = null;
+
+  // ———— 每周计划(计划层,T15,DESIGN「管理三层」)————
+  // 只读状态与内容表;目标与团本选项都转交门面裁决(暂缓判定、自动开团
+  // 一律在 sim),此处只做展示性禁用与状态行。
+
+  /** 第一个已解锁团本的 id(尚无计划时点目标选项的缺省搭档;纯内容派生)。 */
+  function firstUnlockedRaidId(state: GameState): string | undefined {
+    return raidStatuses(state.members).find((status) => status.unlocked)?.def.id;
+  }
+
+  /** 每周计划面板:当周目标 + 团本夜安排 + 执行状态行 + 取消。 */
+  function renderWeeklyPlan(state: GameState): void {
+    const plan = state.weeklyPlan;
+    weeklyPlanSubEl.textContent = plan === undefined
+      ? '常驻模板:设定后自动层每周照此开团'
+      : '常驻模板:每周照此开团,调整即时生效';
+    const card = el('div', 'tactic-panel weekly-plan-panel');
+    const statuses = raidStatuses(state.members);
+
+    // ① 当周目标:三选一(当前目标高亮;无计划时缺省推进)
+    const goalSection = el('div', 'tactic-section');
+    const goalHead = el('div', 'tactic-section-head');
+    goalHead.append(el('span', 'tactic-section-title', '① 当周目标'));
+    goalHead.append(el('span', 'tactic-section-note', '每周团本夜按目标取向结算(心态/卖店/带新倾斜)'));
+    goalSection.append(goalHead);
+    const goalOptions = el('div', 'tactic-options');
+    const currentGoal = plan?.goal ?? DEFAULT_WEEKLY_GOAL;
+    for (const goal of WEEKLY_GOALS) {
+      const current = goal.id === currentGoal;
+      const option = current
+        ? el('div', 'tactic-opt tactic-opt-current')
+        : el('button', 'tactic-opt');
+      if (!current) {
+        (option as HTMLButtonElement).type = 'button';
+        option.dataset.action = 'set-plan-goal';
+        option.dataset.goal = goal.id;
+        if (plan === undefined && firstUnlockedRaidId(state) === undefined) {
+          (option as HTMLButtonElement).disabled = true; // 展示性禁用:无已解锁团本可搭档
+          option.title = '尚无已解锁的团本,计划无从开起';
+        }
+      }
+      const label = el('span', 'tactic-opt-name', current ? `${goal.name}(执行中)` : goal.name);
+      label.title = goal.description;
+      option.append(label);
+      option.append(el('span', 'tactic-opt-meta', goal.tagline));
+      goalOptions.append(option);
+    }
+    goalSection.append(goalOptions);
+    card.append(goalSection);
+
+    // ② 团本夜安排:每周开哪本(当前本高亮;未解锁只展示)
+    const raidSection = el('div', 'tactic-section');
+    const raidHead = el('div', 'tactic-section-head');
+    raidHead.append(el('span', 'tactic-section-title', '② 团本夜安排'));
+    raidHead.append(el('span', 'tactic-section-note', '团本 CD = 游戏周:每周周边界一个团本夜'));
+    raidSection.append(raidHead);
+    const raidOptions = el('div', 'tactic-options');
+    for (const { def, unlocked, unmet } of statuses) {
+      const current = plan?.raidId === def.id;
+      const option = current
+        ? el('div', 'tactic-opt tactic-opt-current')
+        : el('button', 'tactic-opt');
+      if (!current) {
+        (option as HTMLButtonElement).type = 'button';
+        option.dataset.action = 'set-plan-raid';
+        option.dataset.raidId = def.id;
+        if (!unlocked) {
+          (option as HTMLButtonElement).disabled = true; // 展示性禁用:真实裁决仍在门面
+          option.title = `未解锁:需${unmet.join('、')}`;
+        }
+      }
+      const label = el('span', 'tactic-opt-name', current ? `${def.name}(每周开)` : def.name);
+      label.title = def.description;
+      option.append(label);
+      option.append(
+        el('span', 'tactic-opt-meta', `第 ${def.tier} 档 · 首领 ${def.bosses.length} 名`),
+      );
+      raidOptions.append(option);
+    }
+    raidSection.append(raidOptions);
+    card.append(raidSection);
+
+    // ③ 执行状态行:本周是否已照计划排上(裁决与暂缓原因在 sim,事件日志有详情)
+    const stateLine = el('p', 'weekly-plan-state');
+    if (plan === undefined) {
+      stateLine.textContent = '尚未设定周计划 —— 点上方目标或团本即可建立,每周团本夜自动照计划开打。';
+      card.append(stateLine);
+    } else {
+      const night = nextRaidNight(state);
+      const raidName = RAID_BY_ID.get(plan.raidId)?.name ?? '已移出内容表的团本';
+      const goalName = WEEKLY_GOAL_BY_ID.get(plan.goal)?.name ?? plan.goal;
+      if (state.raidPlan?.raidId === plan.raidId && night !== undefined) {
+        stateLine.textContent = `本周已照计划开团:「${raidName}」(目标:${goalName}),团本夜 ${formatGameStamp(
+          night.atGameMinutes,
+        )} 开打。`;
+      } else if (state.raidPlan !== undefined) {
+        stateLine.textContent = `本周手动开团中(手动优先),下周起照计划开「${raidName}」。`;
+      } else {
+        stateLine.textContent = `本周暂未排上 —— 自动层待条件满足后照计划开「${raidName}」(详情见事件日志)。`;
+      }
+      card.append(stateLine);
+      const actions = el('div', 'pool-actions');
+      const clear = el('button', 'pool-btn pool-btn-reject', '取消周计划');
+      clear.type = 'button';
+      clear.dataset.action = 'clear-plan';
+      actions.append(clear);
+      card.append(actions);
+    }
+    weeklyPlanCardEl.replaceChildren(card);
+  }
 
   /** 团本夜面板(日程页):赛前安排预览 + 最近一夜的直播回放。 */
   function renderRaidNight(state: GameState): void {
@@ -1873,6 +2050,9 @@ export function mountApp(root: HTMLElement, options: MountOptions): AppHandle {
           : `止步第 ${report.wipe?.bossIndex ?? report.bosses.length} 首领「${report.wipe?.bossName ?? ''}」:击杀 ${kills}/${report.bosses.length},修理金 ${report.repairGold} 金,全员疲劳与士气受损 —— 无永久损失,下周再战。`,
       ),
     ];
+    if (report.goal !== undefined) {
+      summaryLines.push(el('p', 'raid-summary-line raid-summary-tactics', `当周目标:「${report.goal.name}」—— 周计划照此取向结算(计划设定在「日程」页)。`));
+    }
     if (report.tactics !== undefined) {
       summaryLines.push(el('p', 'raid-summary-line raid-summary-tactics', raidTacticSummaryText(report.tactics)));
     }

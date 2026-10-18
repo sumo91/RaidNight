@@ -3,6 +3,7 @@ import { COMP } from '../content/comp';
 import { DUNGEON_BY_ID } from '../content/dungeons';
 import { EXTERNAL_ACTIVITY_BY_ID, LOOT_SYSTEM_BY_ID, type ExternalActivityId } from '../content/economy';
 import { LEVELING_MAP_BY_ID } from '../content/maps';
+import { WEEKLY_GOAL_BY_ID } from '../content/plan';
 import { RAID_BY_ID } from '../content/raids';
 import {
   CONSUMABLE_TIER_BY_ID,
@@ -15,7 +16,7 @@ import { settleDungeonDay, squadDungeon, squadDungeonReadiness } from './dungeon
 import { settleExternalDay, squadExternalActivity } from './economy';
 import type { SimEvent, SimEventKind } from './events';
 import { evaluateUnlockGates } from './ladder';
-import { teamCheck } from './comp';
+import { teamCheck, teamCheckOf } from './comp';
 import { guildAverageItemLevel, guildAverageLevel } from './roster';
 import { settleLevelingDay, squadLevelingMap } from './leveling';
 import {
@@ -43,8 +44,10 @@ import {
   type GuildEconomy,
   type Member,
   type RaidNightReport,
+  type RaidPlan,
   type RareDropRecord,
   type Squad,
+  type WeeklyPlan,
 } from './state';
 
 // 存档 API 经门面接缝对外暴露(ADR-0003:版本化 + 迁移;纯函数见 sim/save.ts)
@@ -364,6 +367,50 @@ function applyCommand(state: GameState, command: GuildCommand, collector: EventC
       }
       return { ...state, raidPlan: undefined };
     }
+    case 'setWeeklyPlan': {
+      const goal = WEEKLY_GOAL_BY_ID.get(command.goal);
+      const raid = RAID_BY_ID.get(command.raidId);
+      if (goal === undefined || raid === undefined) {
+        return state; // 未知目标或团本不在内容表:忽略
+      }
+      if (state.weeklyPlan?.goal === goal.id && state.weeklyPlan.raidId === raid.id) {
+        return state; // 计划无变化:无事件
+      }
+      const weeklyPlan: WeeklyPlan = {
+        goal: goal.id,
+        raidId: raid.id,
+        setAtGameMinutes: state.clockGameMinutes,
+      };
+      collector.push(
+        state.clockGameMinutes,
+        '团本',
+        `周计划设定:每周开「${raid.name}」,当周目标「${goal.name}」(${goal.tagline})—— 自动层照计划排班,无需逐场手动。`,
+      );
+      let raidPlan = state.raidPlan;
+      if (raidPlan === undefined) {
+        // 本周尚未开团:自动层立即照新计划把本周排上
+        //(本周已手动开团的不被计划覆盖 —— 手动安排优先,夜结束照常清空)
+        raidPlan = autoOpenPerWeeklyPlan(
+          weeklyPlan,
+          state.members,
+          state.squads,
+          state.clockGameMinutes,
+          collector,
+        );
+      }
+      return { ...state, raidPlan, weeklyPlan };
+    }
+    case 'clearWeeklyPlan': {
+      if (state.weeklyPlan === undefined) {
+        return state; // 本就没有周计划:忽略
+      }
+      collector.push(
+        state.clockGameMinutes,
+        '团本',
+        '周计划已取消 —— 此后团本夜需手动开团;本周已开的团不受影响。',
+      );
+      return { ...state, weeklyPlan: undefined };
+    }
     case 'setConsumableBudget': {
       const plan = state.raidPlan;
       if (plan === undefined) {
@@ -577,6 +624,56 @@ function assignExternal(
   return { ...state, squads };
 }
 
+/**
+ * 自动层照周计划开团(计划层执行,T15):与手动 openRaid 同一门槛 ——
+ * 内容阶梯 + 团队检查,通过即开出当周安排;暂缓/失效只记一条事件
+ * (会长可见,条件满足后照计划自动恢复)。纯裁决:不改状态、不掷随机。
+ */
+function autoOpenPerWeeklyPlan(
+  plan: WeeklyPlan,
+  members: readonly Member[],
+  squads: readonly Squad[],
+  atGameMinutes: number,
+  collector: EventCollector,
+): RaidPlan | undefined {
+  const raid = RAID_BY_ID.get(plan.raidId);
+  if (raid === undefined) {
+    collector.push(
+      atGameMinutes,
+      '团本',
+      '自动层停开:周计划所指的团本已不在团本表中 —— 请调整计划。',
+    );
+    return undefined;
+  }
+  const unlock = evaluateUnlockGates(raid.unlock, {
+    averageLevel: guildAverageLevel(members),
+    averageItemLevel: guildAverageItemLevel(members),
+  });
+  if (!unlock.unlocked) {
+    collector.push(
+      atGameMinutes,
+      '团本',
+      `自动层暂缓开团:「${raid.name}」门槛未达(${unlock.unmet.join('、')})—— 条件满足后照计划执行。`,
+    );
+    return undefined;
+  }
+  const check = teamCheckOf(members, squads);
+  if (!check.passed) {
+    collector.push(
+      atGameMinutes,
+      '团本',
+      `自动层暂缓开团:团队检查未通过(${check.failures.map((f) => f.text).join('、')})—— 补齐编成后照计划执行。`,
+    );
+    return undefined;
+  }
+  collector.push(
+    atGameMinutes,
+    '团本',
+    `自动层按周计划开团:「${raid.name}」—— 团本夜定于周边界打响,按首领顺序逐个结算。`,
+  );
+  return { raidId: raid.id, openedAtGameMinutes: atGameMinutes };
+}
+
 /** 从所有小队移除一名团员(保持小队顺序与队内顺序;返回新数组)。 */
 function removeFromSquads(squads: readonly Squad[], memberId: number): readonly Squad[] {
   return squads.map((squad) =>
@@ -607,6 +704,8 @@ function advanceClock(state: GameState, delta: number, collector: EventCollector
   let hallOfFame = state.hallOfFame;
   let rosterCap = state.rosterCap;
   let world = state.world;
+  // 周计划(计划层,T15):循环内不改模板,自动层只照它每周开团
+  const weeklyPlan = state.weeklyPlan;
 
   // 逐个跨越的边界结算;游戏周边界必是游戏日边界(分钟数整除)。
   // 日界结算顺序固定:日更文案 → 申请池刷新(→ 虚拟服务器日结算:行情波/抢苗子)
@@ -688,6 +787,9 @@ function advanceClock(state: GameState, delta: number, collector: EventCollector
           rngState,
           atGameMinutes: nextAt,
           repairCostFactor: repairCostFactor(world),
+          // 当周目标对自动/手动开团的夜一律生效(带新/farm/推进的钩子在结算内)
+          goal:
+            weeklyPlan === undefined ? undefined : WEEKLY_GOAL_BY_ID.get(weeklyPlan.goal),
           emit: (text) => collector.push(nextAt, '团本', text),
         });
         members = raidNight.members;
@@ -700,6 +802,11 @@ function advanceClock(state: GameState, delta: number, collector: EventCollector
         tonightReport = raidNight.report;
       }
       collector.push(nextAt, '周更', `第 ${gameWeek(nextAt)} 周开始,团本 CD 已重置。`);
+      // 自动层照周计划为本周开团(T15,计划层):每周夜结算后重排,
+      // 会长不操作公会照常运转;暂缓/失效记一条事件,条件满足自动恢复
+      if (weeklyPlan !== undefined && raidPlan === undefined) {
+        raidPlan = autoOpenPerWeeklyPlan(weeklyPlan, members, squads, nextAt, collector);
+      }
     }
 
     // ———— 声望与荣誉(T12;GLOSSARY:声望等级/荣誉墙/名人堂)————
@@ -848,6 +955,7 @@ function advanceClock(state: GameState, delta: number, collector: EventCollector
     economy,
     renownPoints,
     raidPlan,
+    weeklyPlan,
     lastRaidNight,
     honorWall,
     hallOfFame,

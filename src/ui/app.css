@@ -2562,6 +2562,18 @@ body {
   color: var(--muted);
 }
 
+/* ———— 每周计划(T15,计划层):常驻周计划面板(日程页)———— */
+
+.weekly-plan-state {
+  margin: 10px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.weekly-plan-panel .pool-actions {
+  margin-top: 8px;
+}
+
 .tactic-panel {
   margin-top: 10px;
   padding: 12px;
