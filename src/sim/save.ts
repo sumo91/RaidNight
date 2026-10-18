@@ -31,7 +31,8 @@ export const SAVE_KIND = 'wowidle-save';
  * - v8(T12):声望与荣誉面 —— 状态新增声望值(renownPoints,替换 v7 的桩值
  *   reputation 0-100 刻度,1:1 结转)、荣誉墙 honorWall(首杀/里程碑/稀有)
  *   与名人堂 hallOfFame;团员新增功绩统计(bossKills/rareLootWon)、入册时刻
- *   (joinedAtGameMinutes)与冷板凳计数(benchDays),旧档一律从 0 补。
+ *   (joinedAtGameMinutes)与冷板凳计数(benchDays),旧档一律从 0 补
+ *   (申请人画像同步补 —— 招入时画像原样转正,缺字段会在结算中变 NaN)。
  */
 export const SAVE_VERSION = 8;
 
@@ -69,7 +70,9 @@ const MIGRATIONS: Readonly<Record<number, Migration>> = {
     ...state,
     vault: state.vault ?? { gold: VAULT.startingGold, repairSpent: 0 },
   }),
-  // v6 → v7:补经济面(个人金/DKP 从 0 起;金库收入累计从 0 计;经济补建会默认)
+  // v6 → v7:补经济面(个人金/DKP 从 0 起;金库收入累计从 0 计;经济补建会默认)。
+  // 申请人画像(personalGold/dkp)同步补:招入时画像原样转正,缺字段会随结算变 NaN
+  // 并在下次落盘后拒档(评审修复:补齐 v6→v7 的同型缺口)
   6: (state) => ({
     ...state,
     members: Array.isArray(state.members)
@@ -79,6 +82,16 @@ const MIGRATIONS: Readonly<Record<number, Migration>> = {
           dkp: member.dkp ?? 0,
         }))
       : state.members,
+    applicants: Array.isArray(state.applicants)
+      ? state.applicants.map((applicant) => ({
+          ...applicant,
+          profile: {
+            ...applicant.profile,
+            personalGold: applicant.profile.personalGold ?? 0,
+            dkp: applicant.profile.dkp ?? 0,
+          },
+        }))
+      : state.applicants,
     vault:
       state.vault !== undefined
         ? { ...state.vault, incomeTotal: state.vault.incomeTotal ?? 0 }
@@ -86,7 +99,9 @@ const MIGRATIONS: Readonly<Record<number, Migration>> = {
     economy: state.economy ?? createInitialEconomy(state.clockGameMinutes ?? 0),
   }),
   // v7 → v8:补声望与荣誉面(功绩/入册时刻/冷板凳从 0 起;荣誉墙与名人堂为空;
-  // 旧声望是 T3 桩值刻度 —— 桩值只减不涨且建会为 0,真实 v7 档恒为 0,1:1 结转不亏)
+  // 旧声望是 T3 桩值刻度 —— 桩值只减不涨且建会为 0,真实 v7 档恒为 0,1:1 结转不亏)。
+  // 申请人画像(bossKills/rareLootWon)同步补:招入即转正,缺字段在击杀/换装结算中
+  // 变 NaN,NaN 落盘成 null 后 looksLikeGameState 拒档,整个存档永久不可读(评审修复)
   7: (state) => {
     const legacy = state as GameState & { reputation?: number };
     const { reputation: _legacyReputation, ...rest } = legacy;
@@ -104,6 +119,16 @@ const MIGRATIONS: Readonly<Record<number, Migration>> = {
             benchDays: member.benchDays ?? 0,
           }))
         : state.members,
+      applicants: Array.isArray(state.applicants)
+        ? state.applicants.map((applicant) => ({
+            ...applicant,
+            profile: {
+              ...applicant.profile,
+              bossKills: applicant.profile.bossKills ?? 0,
+              rareLootWon: applicant.profile.rareLootWon ?? 0,
+            },
+          }))
+        : state.applicants,
     };
   },
 };

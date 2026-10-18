@@ -18,16 +18,18 @@
 ### 如何测试
 
 ```bash
-npm test          # vitest run，一次跑完
+npm test          # vitest run --configLoader runner，一次跑完
 npm run test:watch
 ```
 
 测试只打门面接缝（`src/sim/facade.ts`）：给定种子与「指令 + 时间跳变」脚本，断言状态快照与事件日志；不启动 UI、不依赖 DOM。
 
+> `--configLoader runner`（T12 评审修复引入）：vitest/vite 官方配置加载器，不经 esbuild 打包配置文件。动机 —— 本机 macOS 文件保护层会无限期阻塞 esbuild 二进制 `open()` 项目内（~/Documents 下）的文件，默认的 bundle 加载器让配置文件走 esbuild 真实打开，导致 `vitest run` / `vite build` 启动即挂起；runner 加载器不触发该路径，语义不变。
+
 ### 如何构建
 
 ```bash
-npm run build     # tsc --noEmit && vite build，产物在 dist/
+npm run build     # tsc --noEmit && vite build --configLoader runner，产物在 dist/
 npm run dev       # 本地开发服务器
 npm run preview   # 预览构建产物
 ```

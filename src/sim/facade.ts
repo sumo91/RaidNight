@@ -17,6 +17,7 @@ import {
   accrueBenchDays,
   autoResignations,
   evaluateMilestones,
+  firstKillPointsForRaidTier,
   firstKillsFromRaidNight,
   hallDeedsLine,
   hallEntryFor,
@@ -622,7 +623,9 @@ function advanceClock(state: GameState, delta: number, collector: EventCollector
       if (firstKills.badges.length > 0) {
         honorWall = { ...honorWall, firstKills: [...honorWall.firstKills, ...firstKills.badges] };
         renownPoints += firstKills.points;
-        const perKill = firstKills.points / firstKills.badges.length;
+        // 逐徽章分值按内容表取(同一夜同一团本 ⇒ 每枚同值);不用总分的除法分摊 ——
+        // 非整除内容(如 14 分 3 杀)会在事件文案里出现小数(评审修复)
+        const perKill = firstKillPointsForRaidTier(RAID_BY_ID.get(tonightReport.raidId)?.tier ?? 1);
         for (const badge of firstKills.badges) {
           collector.push(
             nextAt,

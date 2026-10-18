@@ -163,9 +163,14 @@ describe('团本夜 → 声望与荣誉墙:首杀/里程碑/稀有驱动(验收�
       expect(record.atGameMinutes).toBe(GAME_MINUTES_PER_WEEK); // 日期可追溯
     }
 
-    // 事件面:首杀逐条公告、里程碑逐条公告、升档公告(含档名与名册上限)
+    // 事件面:首杀逐条公告(分值按内容表整量显示,不做除法分摊)、里程碑逐条公告、升档公告
     const renownEvents = output.events.filter((event) => event.kind === '声望');
-    expect(renownEvents.filter((event) => event.text.includes('首杀!'))).toHaveLength(RAID.bosses.length);
+    const killEvents = renownEvents.filter((event) => event.text.includes('首杀!'));
+    expect(killEvents).toHaveLength(RAID.bosses.length);
+    const perKill = RENOWN_SOURCES.firstKillPointsByRaidTier[RAID.tier - 1]!;
+    for (const event of killEvents) {
+      expect(event.text).toContain(`声望 +${perKill}`); // 评审修复:逐徽章按表值显示,不出现小数文案
+    }
     expect(renownEvents.some((event) => event.text.includes('里程碑达成:「首通团本」'))).toBe(true);
     expect(
       renownEvents.some((event) => event.text.includes('声望提升') && event.text.includes(TOP_TIER.name)),

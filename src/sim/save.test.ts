@@ -214,3 +214,68 @@ describe('离线结算幂等:同一起止时间重复推进状态一致(验收�
     expect(facade.state).toEqual(settled);
   });
 });
+
+describe('版本迁移:申请人画像补默认(评审修复 —— 招入转正不缺字段)', () => {
+  /** v7 形状:剥掉 v8 声望面字段(名册与申请人画像一并剥),补回桩值 reputation。 */
+  function v7LegacyFile(): string {
+    const { state } = snapshotState();
+    const legacyState = JSON.parse(
+      JSON.stringify(state, (key, value) =>
+        key === 'renownPoints' || key === 'honorWall' || key === 'hallOfFame' ||
+        key === 'bossKills' || key === 'rareLootWon' || key === 'joinedAtGameMinutes' || key === 'benchDays'
+          ? undefined
+          : value,
+      ),
+    );
+    legacyState.reputation = 0; // v7 桩值声望(只减不涨,真实档恒为 0)
+    return JSON.stringify({ version: 7, state: legacyState });
+  }
+
+  it('v7 旧档:申请人画像补 bossKills/rareLootWon = 0;招入转正后字段是数字,落盘可回读', () => {
+    const migrated = decodeSave(v7LegacyFile())!;
+    expect(migrated).not.toBeNull();
+    expect(migrated.applicants.length).toBeGreaterThan(0);
+    expect(migrated.applicants.every((a) => a.profile.bossKills === 0 && a.profile.rareLootWon === 0)).toBe(true);
+    expect(migrated.members.every((m) => m.bossKills === 0 && m.rareLootWon === 0)).toBe(true);
+
+    // 评审指出的丢档链路:招入旧申请人 → (缺字段时 undefined + 1 = NaN → 落盘 null → 拒档)。
+    // 补默认后:字段是数字,推进一日再落盘仍可回读。
+    const facade = new SimulationFacade(0, undefined, migrated);
+    const applicant = facade.state.applicants[0]!;
+    const recruit = facade.dispatch({
+      command: { type: 'recruitApplicant', applicationId: applicant.applicationId },
+      deltaGameMinutes: 0,
+    });
+    expect(recruit.events.some((e) => e.kind === '招募' && e.text.includes('正式入册'))).toBe(true);
+    const joined = facade.state.members.find((m) => m.name === applicant.profile.name)!;
+    expect(Number.isFinite(joined.bossKills)).toBe(true); // 不是 undefined(否则击杀结算会变 NaN)
+    expect(Number.isFinite(joined.rareLootWon)).toBe(true);
+    facade.dispatch({ deltaGameMinutes: GAME_MINUTES_PER_DAY });
+    expect(Number.isFinite(facade.state.members.find((m) => m.name === applicant.profile.name)!.bossKills)).toBe(true);
+    expect(decodeSave(encodeSave(facade.state))).not.toBeNull(); // 不再因 NaN→null 被结构防御拒档
+  });
+
+  it('v6 旧档:申请人画像补 personalGold/dkp = 0(v6→v7 的同型缺口一并修复)', () => {
+    const { state } = snapshotState();
+    const legacyState = JSON.parse(
+      JSON.stringify(state, (key, value) =>
+        key === 'economy' || key === 'personalGold' || key === 'dkp' || key === 'incomeTotal'
+          ? undefined
+          : value,
+      ),
+    );
+    const migrated = decodeSave(JSON.stringify({ version: 6, state: legacyState }))!;
+    expect(migrated).not.toBeNull();
+    expect(migrated.applicants.length).toBeGreaterThan(0);
+    expect(migrated.applicants.every((a) => a.profile.personalGold === 0 && a.profile.dkp === 0)).toBe(true);
+    expect(migrated.members.every((m) => m.personalGold === 0 && m.dkp === 0)).toBe(true);
+
+    const facade = new SimulationFacade(0, undefined, migrated);
+    const applicant = facade.state.applicants[0]!;
+    facade.dispatch({ command: { type: 'recruitApplicant', applicationId: applicant.applicationId }, deltaGameMinutes: 0 });
+    const joined = facade.state.members.find((m) => m.name === applicant.profile.name)!;
+    expect(Number.isFinite(joined.personalGold)).toBe(true);
+    expect(Number.isFinite(joined.dkp)).toBe(true);
+    expect(decodeSave(encodeSave(facade.state))).not.toBeNull();
+  });
+});
